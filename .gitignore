@@ -10,10 +10,8 @@ web-build/
 ios/
 android/
 
-# Environment
-.env
+# Environment (local-only overrides)
 .env.local
-.env.production
 
 # IDE
 .vscode/

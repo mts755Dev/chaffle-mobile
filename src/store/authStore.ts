@@ -25,19 +25,22 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   initialize: async () => {
     try {
-      const { data: { session } } = await supabase.auth.getSession();
-      if (session) {
+      const { data, error } = await supabase.auth.getSession();
+      if (error) {
+        set({ isLoading: false });
+        return;
+      }
+      if (data?.session) {
         set({
-          user: session.user,
-          session,
-          isAdmin: true, // Only admins can login
+          user: data.session.user,
+          session: data.session,
+          isAdmin: true,
           isLoading: false,
         });
       } else {
         set({ isLoading: false });
       }
 
-      // Listen for auth changes
       supabase.auth.onAuthStateChange((_event, session) => {
         set({
           user: session?.user || null,

@@ -4,9 +4,18 @@
     "appVersionSource": "local"
   },
   "build": {
+    "base": {
+      "env": {
+        "EXPO_PUBLIC_API_BASE_URL": "https://chaffle.org"
+      }
+    },
     "development": {
+      "extends": "base",
       "developmentClient": true,
       "distribution": "internal",
+      "ios": {
+        "simulator": false
+      },
       "android": {
         "buildType": "apk"
       },
@@ -15,7 +24,11 @@
       }
     },
     "preview": {
+      "extends": "base",
       "distribution": "internal",
+      "ios": {
+        "simulator": false
+      },
       "android": {
         "buildType": "apk"
       },
@@ -24,6 +37,7 @@
       }
     },
     "production": {
+      "extends": "base",
       "autoIncrement": true,
       "env": {
         "EXPO_PUBLIC_STRIPE_TERMINAL_SIMULATED": "false"
@@ -33,9 +47,9 @@
   "submit": {
     "production": {
       "ios": {
-        "appleId": "REPLACE_WITH_YOUR_APPLE_ID",
-        "ascAppId": "REPLACE_WITH_YOUR_ASC_APP_ID",
-        "appleTeamId": "REPLACE_WITH_YOUR_TEAM_ID"
+        "appleId": "henry@chaffle.org",
+        "ascAppId": "6761272828",
+        "appleTeamId": "9Q77P6XGBQ"
       },
       "android": {
         "serviceAccountKeyPath": "./google-services.json"

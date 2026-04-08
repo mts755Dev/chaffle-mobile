@@ -1,8 +1,7 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import * as SecureStore from 'expo-secure-store';
 import { SUPABASE_URL, SUPABASE_ANON_KEY } from '../../constants';
 
-// Custom storage adapter using expo-secure-store
 const ExpoSecureStoreAdapter = {
   getItem: async (key: string): Promise<string | null> => {
     try {
@@ -14,26 +13,40 @@ const ExpoSecureStoreAdapter = {
   setItem: async (key: string, value: string): Promise<void> => {
     try {
       await SecureStore.setItemAsync(key, value);
-    } catch {
-      // Silently fail - storage not available
-    }
+    } catch {}
   },
   removeItem: async (key: string): Promise<void> => {
     try {
       await SecureStore.deleteItemAsync(key);
-    } catch {
-      // Silently fail
-    }
+    } catch {}
   },
 };
 
-export const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
-  auth: {
-    storage: ExpoSecureStoreAdapter,
-    autoRefreshToken: true,
-    persistSession: true,
-    detectSessionInUrl: false,
-  },
-});
+function buildClient(): SupabaseClient {
+  const url = SUPABASE_URL?.trim();
+  const key = SUPABASE_ANON_KEY?.trim();
 
+  if (!url || !key) {
+    console.warn('Supabase credentials missing — auth will be unavailable');
+    return createClient('https://placeholder.supabase.co', 'placeholder', {
+      auth: {
+        storage: ExpoSecureStoreAdapter,
+        autoRefreshToken: false,
+        persistSession: false,
+        detectSessionInUrl: false,
+      },
+    });
+  }
+
+  return createClient(url, key, {
+    auth: {
+      storage: ExpoSecureStoreAdapter,
+      autoRefreshToken: true,
+      persistSession: true,
+      detectSessionInUrl: false,
+    },
+  });
+}
+
+export const supabase = buildClient();
 export default supabase;

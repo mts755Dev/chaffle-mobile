@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, Component, ErrorInfo } from 'react';
+import React, { useEffect, useState, Component, ErrorInfo } from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { PaperProvider } from 'react-native-paper';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
@@ -12,13 +12,19 @@ import { theme } from './src/constants/theme';
 import { STRIPE_PUBLISHABLE_KEY } from './src/constants';
 import { useAuthStore } from './src/store/authStore';
 
+// ── Splash screen: prevent auto-hide, but ALWAYS force-hide after 4s ──
+// This global timeout guarantees the native splash goes away even if
+// React crashes during mount or the JS bundle fails to fully execute.
 try {
   ExpoSplashScreen.preventAutoHideAsync();
-} catch {
-  // Safe to ignore — splash screen will auto-hide
-}
+} catch {}
 
-// ── Error Boundary — catches JS crashes and shows them on screen ──
+const GLOBAL_SPLASH_TIMEOUT_MS = 4000;
+setTimeout(() => {
+  ExpoSplashScreen.hideAsync().catch(() => {});
+}, GLOBAL_SPLASH_TIMEOUT_MS);
+
+// ── Error Boundary ──
 interface ErrorBoundaryState {
   hasError: boolean;
   error: Error | null;
@@ -62,38 +68,44 @@ class ErrorBoundary extends Component<{ children: React.ReactNode }, ErrorBounda
   }
 }
 
+const INIT_TIMEOUT_MS = 5000;
+
 function AppContent() {
   const { initialize } = useAuthStore();
   const [appReady, setAppReady] = useState(false);
   const [splashDone, setSplashDone] = useState(false);
 
   useEffect(() => {
-    async function prepare() {
-      try {
-        await initialize();
-      } catch {
-        // Auth init failed — continue without session
-      } finally {
+    let settled = false;
+    const markReady = () => {
+      if (!settled) {
+        settled = true;
         setAppReady(true);
       }
-    }
-    prepare();
+    };
+
+    const timeout = setTimeout(markReady, INIT_TIMEOUT_MS);
+
+    initialize()
+      .catch(() => {})
+      .finally(() => {
+        clearTimeout(timeout);
+        markReady();
+      });
+
+    return () => clearTimeout(timeout);
   }, []);
 
-  const onLayoutReady = useCallback(async () => {
+  useEffect(() => {
     if (appReady) {
-      try {
-        await ExpoSplashScreen.hideAsync();
-      } catch {
-        // Safe to ignore
-      }
+      ExpoSplashScreen.hideAsync().catch(() => {});
     }
   }, [appReady]);
 
   if (!appReady) return null;
 
   return (
-    <View style={styles.container} onLayout={onLayoutReady}>
+    <View style={styles.container}>
       <StatusBar style={splashDone ? 'dark' : 'light'} />
       <AppNavigator />
       {!splashDone && <SplashScreen onFinish={() => setSplashDone(true)} />}
@@ -102,7 +114,8 @@ function AppContent() {
 }
 
 export default function App() {
-  const hasValidStripeKey = STRIPE_PUBLISHABLE_KEY.startsWith('pk_');
+  const hasValidStripeKey =
+    typeof STRIPE_PUBLISHABLE_KEY === 'string' && STRIPE_PUBLISHABLE_KEY.startsWith('pk_');
 
   const content = (
     <PaperProvider theme={theme}>

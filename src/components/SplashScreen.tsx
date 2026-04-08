@@ -1,9 +1,11 @@
 import React, { useEffect, useRef } from 'react';
-import { View, StyleSheet, Animated, Dimensions, Image } from 'react-native';
+import { View, StyleSheet, Animated, Dimensions, Easing, Image } from 'react-native';
 import { COLORS } from '../constants';
 
 const chaffleLogo = require('../../assets/chaffle-logo.png');
 const { width } = Dimensions.get('window');
+
+const SAFETY_TIMEOUT_MS = 5000;
 
 interface SplashScreenProps {
   onFinish: () => void;
@@ -15,25 +17,33 @@ export default function SplashScreen({ onFinish }: SplashScreenProps) {
   const taglineOpacity = useRef(new Animated.Value(0)).current;
   const taglineTranslateY = useRef(new Animated.Value(12)).current;
   const screenOpacity = useRef(new Animated.Value(1)).current;
+  const finished = useRef(false);
 
   useEffect(() => {
+    const safeFinish = () => {
+      if (!finished.current) {
+        finished.current = true;
+        onFinish();
+      }
+    };
+
+    const timeout = setTimeout(safeFinish, SAFETY_TIMEOUT_MS);
+
     Animated.sequence([
-      // 1. Logo fades in and scales up
       Animated.parallel([
         Animated.timing(logoOpacity, {
           toValue: 1,
           duration: 600,
           useNativeDriver: true,
         }),
-        Animated.spring(logoScale, {
+        Animated.timing(logoScale, {
           toValue: 1,
-          tension: 60,
-          friction: 8,
+          duration: 600,
+          easing: Easing.out(Easing.back(1.4)),
           useNativeDriver: true,
         }),
       ]),
 
-      // 2. Tagline slides up and fades in
       Animated.parallel([
         Animated.timing(taglineOpacity, {
           toValue: 1,
@@ -47,18 +57,19 @@ export default function SplashScreen({ onFinish }: SplashScreenProps) {
         }),
       ]),
 
-      // 3. Hold for a beat
       Animated.delay(800),
 
-      // 4. Fade out entire screen
       Animated.timing(screenOpacity, {
         toValue: 0,
         duration: 350,
         useNativeDriver: true,
       }),
     ]).start(() => {
-      onFinish();
+      clearTimeout(timeout);
+      safeFinish();
     });
+
+    return () => clearTimeout(timeout);
   }, []);
 
   return (

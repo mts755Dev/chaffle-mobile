@@ -1,4 +1,5 @@
 import dayjs from 'dayjs';
+import { SUPABASE_URL } from '../constants';
 
 /**
  * Format a number as currency
@@ -70,6 +71,19 @@ export function shortId(uuid: string): string {
  */
 export function calculatePot(totalAmount: number): number {
   return Math.floor(totalAmount / 2);
+}
+
+/**
+ * Resolve an image path to a full URL.
+ * Handles relative Supabase storage paths stored in the DB by the web app.
+ */
+export function resolveImageUrl(url: string | null | undefined): string | undefined {
+  if (!url) return undefined;
+  if (url.startsWith('http://') || url.startsWith('https://')) return url;
+  const base = SUPABASE_URL?.replace(/\/$/, '');
+  if (!base) return undefined;
+  const path = url.startsWith('/') ? url : `/${url}`;
+  return `${base}/storage/v1/object/${path}`;
 }
 
 /**

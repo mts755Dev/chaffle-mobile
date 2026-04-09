@@ -259,11 +259,12 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
         setPaymentError(null);
         terminalLog.connection(`Connecting to ${reader.serialNumber}…`);
 
-        const locationId = reader.locationId ?? reader.location?.id;
+        let locationId = reader.locationId ?? reader.location?.id;
+
         if (!locationId && !STRIPE_TERMINAL_SIMULATED) {
-          throw new Error(
-            'Reader has no location assigned. Register the reader to a location in the Stripe Dashboard.'
-          );
+          terminalLog.connection('Reader has no location — fetching default location…');
+          locationId = await stripeApi.getOrCreateTerminalLocation(stripeAccount);
+          terminalLog.connection(`Using location: ${locationId}`);
         }
 
         const { reader: connected, error } = await sdkConnectReader({

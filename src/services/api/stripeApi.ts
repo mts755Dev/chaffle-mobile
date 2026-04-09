@@ -1,14 +1,16 @@
 import apiClient from './client';
+import { supabase } from '../supabase/client';
 import { API_BASE_URL } from '../../constants';
 
 /**
  * Stripe API calls
- * These hit the Next.js API routes which handle Stripe operations server-side
+ * Payment-critical operations use Supabase Edge Functions (server-side, secure).
+ * Admin/Terminal operations use the Next.js API routes.
  */
 export const stripeApi = {
   /**
-   * Create a checkout session for ticket purchase
-   * The web app uses server actions, so we call the equivalent API route
+   * Create a PaymentIntent for ticket purchase via Supabase Edge Function.
+   * The Edge Function keeps the Stripe secret key server-side.
    */
   createPaymentIntent: async (params: {
     amount: number;
@@ -18,17 +20,25 @@ export const stripeApi = {
     raffleAccount: string;
     isApplicationAmount?: boolean;
   }) => {
-    // This hits a custom API route on the Next.js backend
-    const response = await apiClient.post('/api/stripe/create-payment-intent', params);
-    return response.data;
+    const { data, error } = await supabase.functions.invoke('create-payment-intent', {
+      body: params,
+    });
+
+    if (error) throw new Error(error.message || 'Failed to create payment intent');
+    if (data?.error) throw new Error(data.error);
+    return data as { clientSecret: string; id: string };
   },
 
   /**
-   * Confirm payment success (mark ticket as paid)
+   * Confirm payment success — mark ticket as paid directly in the database.
    */
   confirmPaymentSuccess: async (ticketId: string) => {
-    const response = await apiClient.get(`/api/stripe/payment/${ticketId}/success`);
-    return response.data;
+    const { error } = await supabase
+      .from('ticket')
+      .update({ paid: true })
+      .eq('id', ticketId);
+    if (error) throw error;
+    return { success: true };
   },
 
   /**
@@ -82,6 +92,20 @@ export const stripeApi = {
       location_id: locationId,
     });
     return response.data as { secret: string };
+  },
+
+  /**
+   * Get or create a default Stripe Terminal Location via Edge Function.
+   * Required for Bluetooth reader connections.
+   */
+  getOrCreateTerminalLocation: async (stripeAccount?: string): Promise<string> => {
+    const { data, error } = await supabase.functions.invoke('get-terminal-location', {
+      body: { stripeAccount },
+    });
+
+    if (error) throw new Error(error.message || 'Failed to get terminal location');
+    if (data?.error) throw new Error(data.error);
+    return data.locationId;
   },
 
   // ── Stripe Terminal endpoints ────────────────────────────────────

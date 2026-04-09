@@ -27,6 +27,7 @@ import { useRaffleStore } from '../../../store/raffleStore';
 import { stripeApi } from '../../../services/api/stripeApi';
 import { secureLinkApi } from '../../../services/api/raffleApi';
 import { useImageUpload } from '../../../hooks/useImageUpload';
+import { resolveImageUrl } from '../../../utils';
 import LoadingScreen from '../../../components/LoadingScreen';
 import * as Clipboard from 'expo-clipboard';
 
@@ -423,9 +424,9 @@ export default function EditRaffleScreen() {
         <Card style={styles.card}>
           <Card.Content>
             <Text style={styles.cardTitle}>Background Image</Text>
-            {form.backgroundImage ? (
+            {resolveImageUrl(form.backgroundImage) ? (
               <Image
-                source={{ uri: form.backgroundImage }}
+                source={{ uri: resolveImageUrl(form.backgroundImage)! }}
                 style={styles.previewImage}
                 resizeMode="cover"
               />

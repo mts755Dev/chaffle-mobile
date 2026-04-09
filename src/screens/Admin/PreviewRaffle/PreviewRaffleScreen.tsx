@@ -34,6 +34,7 @@ import {
   calculatePot,
   formatDate,
   stripHtml,
+  resolveImageUrl,
 } from '../../../utils';
 import CountdownTimer from '../../../components/CountdownTimer';
 import HtmlContent from '../../../components/HtmlContent';
@@ -135,9 +136,9 @@ export default function PreviewRaffleScreen() {
       >
         {/* ─── Hero ─────────────────────────────────────────────── */}
         <View style={styles.hero}>
-          {donationForm.backgroundImage ? (
+          {resolveImageUrl(donationForm.backgroundImage) ? (
             <Image
-              source={{ uri: donationForm.backgroundImage }}
+              source={{ uri: resolveImageUrl(donationForm.backgroundImage) }}
               style={styles.heroImage}
               resizeMode="cover"
             />
@@ -668,7 +669,6 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     padding: 14,
-    overflow: 'hidden',
   },
   tileLabelTop: {
     fontSize: 10,

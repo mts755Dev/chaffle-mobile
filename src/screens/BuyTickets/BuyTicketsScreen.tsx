@@ -120,13 +120,6 @@ export default function BuyTicketsScreen() {
       });
 
       if (!paymentData?.clientSecret) {
-        // Fallback: try using checkout session URL
-        if (paymentData?.url) {
-          // Open Stripe checkout in browser
-          const { Linking } = require('react-native');
-          await Linking.openURL(paymentData.url);
-          return;
-        }
         throw new Error('Failed to create payment');
       }
 
@@ -135,6 +128,7 @@ export default function BuyTicketsScreen() {
         paymentIntentClientSecret: paymentData.clientSecret,
         merchantDisplayName: 'Chaffle',
         allowsDelayedPaymentMethods: false,
+        returnURL: 'chaffle://payment-complete',
       });
 
       if (initError) {
@@ -279,10 +273,11 @@ export default function BuyTicketsScreen() {
 
         {/* Checkboxes */}
         <View style={styles.checkboxRow}>
-          <Checkbox
+          <Checkbox.Android
             status={acceptedTerms ? 'checked' : 'unchecked'}
             onPress={() => setAcceptedTerms(!acceptedTerms)}
             color={COLORS.primary}
+            uncheckedColor={COLORS.textSecondary}
           />
           <Text style={styles.checkboxLabel} onPress={() => setAcceptedTerms(!acceptedTerms)}>
             I accept the terms and conditions
@@ -290,10 +285,11 @@ export default function BuyTicketsScreen() {
         </View>
 
         <View style={styles.checkboxRow}>
-          <Checkbox
+          <Checkbox.Android
             status={donateExtra ? 'checked' : 'unchecked'}
             onPress={() => setDonateExtra(!donateExtra)}
             color={COLORS.primary}
+            uncheckedColor={COLORS.textSecondary}
           />
           <Text style={styles.checkboxLabel} onPress={() => setDonateExtra(!donateExtra)}>
             Donate an extra 10% platform fee to support Chaffle

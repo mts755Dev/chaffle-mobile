@@ -87,11 +87,13 @@ export const stripeApi = {
   /**
    * Create Terminal connection token (admin - in person payments)
    */
-  createTerminalConnectionToken: async (locationId?: string) => {
-    const response = await apiClient.post('/api/terminal/connection-token', {
-      location_id: locationId,
+  createTerminalConnectionToken: async (_locationId?: string) => {
+    const { data, error } = await supabase.functions.invoke('terminal-connection-token', {
+      body: {},
     });
-    return response.data as { secret: string };
+    if (error) throw new Error(error.message || 'Failed to create connection token');
+    if (data?.error) throw new Error(data.error);
+    return data as { secret: string };
   },
 
   /**
@@ -119,8 +121,12 @@ export const stripeApi = {
     metadata?: Record<string, string>;
     stripeAccount?: string;
   }) => {
-    const response = await apiClient.post('/api/terminal/create-payment-intent', params);
-    return response.data as {
+    const { data, error } = await supabase.functions.invoke('terminal-payment-intent', {
+      body: { action: 'create', ...params },
+    });
+    if (error) throw new Error(error.message || 'Failed to create terminal payment intent');
+    if (data?.error) throw new Error(data.error);
+    return data as {
       id: string;
       client_secret: string;
       status: string;
@@ -132,22 +138,24 @@ export const stripeApi = {
   /**
    * Capture a previously authorized Terminal PaymentIntent
    */
-  captureTerminalPayment: async (paymentIntentId: string, stripeAccount?: string) => {
-    const response = await apiClient.post('/api/terminal/capture-payment', {
-      paymentIntentId,
-      stripeAccount,
+  captureTerminalPayment: async (paymentIntentId: string, _stripeAccount?: string) => {
+    const { data, error } = await supabase.functions.invoke('terminal-payment-intent', {
+      body: { action: 'capture', paymentIntentId },
     });
-    return response.data as { id: string; status: string; amount: number };
+    if (error) throw new Error(error.message || 'Failed to capture terminal payment');
+    if (data?.error) throw new Error(data.error);
+    return data as { id: string; status: string; amount: number };
   },
 
   /**
    * Cancel an in-progress Terminal PaymentIntent
    */
-  cancelTerminalPayment: async (paymentIntentId: string, stripeAccount?: string) => {
-    const response = await apiClient.post('/api/terminal/cancel-payment', {
-      paymentIntentId,
-      stripeAccount,
+  cancelTerminalPayment: async (paymentIntentId: string, _stripeAccount?: string) => {
+    const { data, error } = await supabase.functions.invoke('terminal-payment-intent', {
+      body: { action: 'cancel', paymentIntentId },
     });
-    return response.data as { id: string; status: string };
+    if (error) throw new Error(error.message || 'Failed to cancel terminal payment');
+    if (data?.error) throw new Error(data.error);
+    return data as { id: string; status: string };
   },
 };

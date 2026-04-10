@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   StyleSheet,
@@ -40,26 +40,63 @@ type InPersonPaymentRouteProp = RouteProp<RootStackParamList, 'InPersonPayment'>
 
 type Step = 'tickets' | 'details';
 
+/**
+ * Wrapper that loads the raffle FIRST, then mounts StripeTerminalProvider
+ * with a dynamic tokenProvider scoped to the raffle's connected Stripe account.
+ * This enables direct charges: the SDK authenticates as the connected account.
+ */
 export default function InPersonPaymentScreen() {
-  return (
-    <StripeTerminalProvider
-      logLevel={__DEV__ ? 'verbose' : 'none'}
-      tokenProvider={fetchConnectionToken}
-    >
-      <InPersonPaymentContent />
-    </StripeTerminalProvider>
-  );
-}
-
-function InPersonPaymentContent() {
   const route = useRoute<InPersonPaymentRouteProp>();
   const navigation = useNavigation<NavigationProp>();
   const { id } = route.params;
 
-  // Raffle data
   const [raffle, setRaffle] = useState<DonationForm | null>(null);
   const [isLoadingRaffle, setIsLoadingRaffle] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+
+  const loadRaffle = useCallback(async () => {
+    setIsLoadingRaffle(true);
+    setLoadError(null);
+    try {
+      const form = await raffleApi.getDonationFormById(id);
+      if (!form) { setLoadError('Raffle not found'); return; }
+      const hasWinner = await ticketApi.hasRaffleWinner(id);
+      if (hasWinner) {
+        Alert.alert('Raffle Completed', 'This raffle already has a winner.');
+        navigation.goBack();
+        return;
+      }
+      setRaffle(form);
+    } catch (err: any) {
+      setLoadError(err.message || 'Failed to load raffle');
+    } finally {
+      setIsLoadingRaffle(false);
+    }
+  }, [id, navigation]);
+
+  useEffect(() => { loadRaffle(); }, [loadRaffle]);
+
+  if (isLoadingRaffle) return <LoadingScreen message="Loading raffle…" />;
+  if (loadError) return <ErrorScreen message={loadError} onRetry={loadRaffle} />;
+  if (!raffle) return <ErrorScreen message="Raffle not found" />;
+
+  const stripeAccountId = (raffle.stripeAccount as any)?.id as string | undefined;
+
+  return (
+    <StripeTerminalProvider
+      key={stripeAccountId || 'platform'}
+      logLevel={__DEV__ ? 'verbose' : 'none'}
+      tokenProvider={() => fetchConnectionToken(stripeAccountId)}
+    >
+      <InPersonPaymentContent raffle={raffle} />
+    </StripeTerminalProvider>
+  );
+}
+
+function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
+  const route = useRoute<InPersonPaymentRouteProp>();
+  const navigation = useNavigation<NavigationProp>();
+  const { id } = route.params;
 
   // Reader selection (UI state for selecting before connecting)
   const [selectedReader, setSelectedReader] = useState<Reader.Type | null>(null);
@@ -81,7 +118,7 @@ function InPersonPaymentContent() {
   const [snackMessage, setSnackMessage] = useState('');
 
   // ── Stripe Terminal Hook ────────────────────────────────────────────
-  const stripeAccountId = (raffle?.stripeAccount as any)?.id;
+  const stripeAccountId = (raffle.stripeAccount as any)?.id as string | undefined;
 
   const {
     discoveredReaders,
@@ -100,44 +137,19 @@ function InPersonPaymentContent() {
     resetPayment,
   } = useStripeReader({ stripeAccount: stripeAccountId });
 
-  // ── Load raffle ─────────────────────────────────────────────────────
-  useEffect(() => {
-    loadRaffle();
-  }, [id]);
-
-  const loadRaffle = async () => {
-    setIsLoadingRaffle(true);
-    setLoadError(null);
-    try {
-      const form = await raffleApi.getDonationFormById(id);
-      if (!form) {
-        setLoadError('Raffle not found');
-        return;
-      }
-      const hasWinner = await ticketApi.hasRaffleWinner(id);
-      if (hasWinner) {
-        Alert.alert('Raffle Completed', 'This raffle already has a winner.');
-        navigation.goBack();
-        return;
-      }
-      setRaffle(form);
-    } catch (err: any) {
-      setLoadError(err.message || 'Failed to load raffle');
-    } finally {
-      setIsLoadingRaffle(false);
-    }
-  };
-
   // ── Reader handlers ─────────────────────────────────────────────────
   const handleDiscover = () => {
     setSelectedReader(null);
     discoverReaders();
   };
 
-  const handleConnect = () => {
+  const handleConnect = async () => {
     if (!selectedReader) {
       Alert.alert('Select a Reader', 'Please select a reader from the list first');
       return;
+    }
+    if (isDiscovering) {
+      await cancelDiscovery();
     }
     connectToReader(selectedReader);
   };
@@ -185,18 +197,19 @@ function InPersonPaymentContent() {
         paid: false,
       });
 
-      // 2. Calculate total with optional platform fee
-      const fee = platformFee ? Math.round(selectedTier.price * 0.1) : 0;
-      const totalAmount = selectedTier.price + fee;
-
-      // 3. Collect payment via the connected Stripe Terminal reader
-      const result = await collectPayment(totalAmount, {
-        raffleId: id,
-        buyerEmail,
-        buyerName,
-        quantity: String(selectedTier.quantity),
-        ticketId: ticket.id,
-      });
+      // 2. Collect payment via the connected Stripe Terminal reader
+      // Pass base price — the Edge Function adds the 10% fee on top if isApplicationAmount is true
+      const result = await collectPayment(
+        selectedTier.price,
+        {
+          raffleId: id,
+          buyerEmail,
+          buyerName,
+          quantity: String(selectedTier.quantity),
+          ticketId: ticket.id,
+        },
+        platformFee,
+      );
 
       // 4. Mark ticket as paid in the database
       await ticketApi.updateTicket(ticket.id, {
@@ -239,17 +252,6 @@ function InPersonPaymentContent() {
     setSelectedTier(null);
     setPlatformFee(true);
   };
-
-  // ── Loading / error states ──────────────────────────────────────────
-  if (isLoadingRaffle) {
-    return <LoadingScreen message="Loading raffle…" />;
-  }
-  if (loadError) {
-    return <ErrorScreen message={loadError} onRetry={loadRaffle} />;
-  }
-  if (!raffle) {
-    return <ErrorScreen message="Raffle not found" />;
-  }
 
   const isConnected = connectionStatus === 'connected';
 

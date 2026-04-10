@@ -1,4 +1,8 @@
 // @ts-nocheck — Runs in Supabase's Deno runtime, not in the React Native bundle.
+//
+// Gets or creates a Terminal location.
+// When stripeAccount is provided, the location is created on the connected
+// account (direct-charge flow). Otherwise it defaults to the platform.
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -22,6 +26,7 @@ async function stripeRequest(
   const headers: Record<string, string> = {
     Authorization: `Bearer ${Deno.env.get("STRIPE_KEY")}`,
   };
+
   if (stripeAccount) {
     headers["Stripe-Account"] = stripeAccount;
   }
@@ -54,7 +59,6 @@ Deno.serve(async (req: Request) => {
   try {
     const { stripeAccount } = await req.json().catch(() => ({}));
 
-    // Try to find an existing location
     const locations = await stripeRequest(
       "GET",
       "/terminal/locations",
@@ -66,7 +70,6 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ locationId: locations.data[0].id });
     }
 
-    // No location exists — create a default one
     const location = await stripeRequest(
       "POST",
       "/terminal/locations",

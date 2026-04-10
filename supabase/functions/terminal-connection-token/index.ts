@@ -1,4 +1,8 @@
 // @ts-nocheck — Runs in Supabase's Deno runtime, not in the React Native bundle.
+//
+// Creates a connection token for the Stripe Terminal SDK.
+// When stripeAccount is provided, the token is created on the connected account
+// so the SDK authenticates as that account (direct charges).
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -24,16 +28,20 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ error: "Stripe key not configured" }, 500);
     }
 
+    const { stripeAccount } = await req.json().catch(() => ({}));
+
+    const headers: Record<string, string> = {
+      Authorization: `Bearer ${stripeKey}`,
+      "Content-Type": "application/x-www-form-urlencoded",
+    };
+
+    if (stripeAccount) {
+      headers["Stripe-Account"] = stripeAccount;
+    }
+
     const res = await fetch(
       "https://api.stripe.com/v1/terminal/connection_tokens",
-      {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${stripeKey}`,
-          "Content-Type": "application/x-www-form-urlencoded",
-        },
-        body: "",
-      },
+      { method: "POST", headers, body: "" },
     );
 
     const data = await res.json();

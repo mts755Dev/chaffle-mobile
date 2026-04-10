@@ -24,6 +24,8 @@ import type {
 } from '../types';
 
 const MAX_RECONNECT_ATTEMPTS = 3;
+const RECONNECT_DELAY_MS = 2000;
+const CONNECT_TIMEOUT_MS = 30_000;
 
 /**
  * Request Bluetooth + location permissions required by the Stripe Terminal SDK
@@ -57,7 +59,19 @@ async function requestBluetoothPermissions(): Promise<boolean> {
     return false;
   }
 }
-const RECONNECT_DELAY_MS = 2000;
+
+/**
+ * Wrap a promise with a timeout. Rejects with a message if not settled in time.
+ */
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error(`${label} timed out after ${ms / 1000}s`)), ms);
+    promise.then(
+      (val) => { clearTimeout(timer); resolve(val); },
+      (err) => { clearTimeout(timer); reject(err); },
+    );
+  });
+}
 
 interface UseStripeReaderOptions {
   stripeAccount?: string;
@@ -149,6 +163,12 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
   const lastConnectedReader = useRef<Reader.Type | null>(null);
   const currentPaymentIntentId = useRef<string | null>(null);
   const initPromiseRef = useRef<Promise<boolean> | null>(null);
+  const isDiscoveringRef = useRef(false);
+
+  // Keep ref in sync with state so async functions always read the latest value
+  useEffect(() => {
+    isDiscoveringRef.current = isDiscovering;
+  }, [isDiscovering]);
 
   // ── SDK Initialization ────────────────────────────────────────────
   const ensureInitialized = useCallback(async (): Promise<boolean> => {
@@ -157,7 +177,6 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
       return true;
     }
 
-    // If already initializing, wait for that promise
     if (initPromiseRef.current) {
       return initPromiseRef.current;
     }
@@ -259,20 +278,60 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
         setPaymentError(null);
         terminalLog.connection(`Connecting to ${reader.serialNumber}…`);
 
+        // 1. Cancel any active discovery — SDK requires discovery to be stopped before connecting
+        if (isDiscoveringRef.current) {
+          terminalLog.connection('Cancelling active discovery before connecting…');
+          try {
+            await cancelDiscovering();
+            setIsDiscovering(false);
+          } catch {
+            // Discovery may already be finished
+          }
+          // Brief pause to let the native SDK finish cleanup
+          await new Promise((r) => setTimeout(r, 500));
+        }
+
+        // 2. Resolve a valid locationId (required for Bluetooth readers)
         let locationId = reader.locationId ?? reader.location?.id;
 
         if (!locationId && !STRIPE_TERMINAL_SIMULATED) {
-          terminalLog.connection('Reader has no location — fetching default location…');
-          locationId = await stripeApi.getOrCreateTerminalLocation(stripeAccount);
-          terminalLog.connection(`Using location: ${locationId}`);
+          terminalLog.connection('Reader has no location — fetching location…');
+          try {
+            // Location is on the connected account for direct charges
+            locationId = await withTimeout(
+              stripeApi.getOrCreateTerminalLocation(stripeAccount),
+              10_000,
+              'getOrCreateTerminalLocation',
+            );
+            terminalLog.connection(`Using location: ${locationId}`);
+          } catch (locErr: any) {
+            terminalLog.error('Failed to get terminal location', locErr);
+            throw new Error(
+              `Could not get a Terminal location: ${locErr.message}. ` +
+              'Ensure the reader is registered to a Stripe location in the Dashboard.'
+            );
+          }
         }
 
-        const { reader: connected, error } = await sdkConnectReader({
-          discoveryMethod: 'bluetoothScan',
-          reader,
-          locationId: locationId ?? '',
-          autoReconnectOnUnexpectedDisconnect: true,
-        });
+        if (!locationId && !STRIPE_TERMINAL_SIMULATED) {
+          throw new Error(
+            'No location ID available. Register the reader to a location in the Stripe Dashboard.'
+          );
+        }
+
+        // 3. Connect with a timeout so the UI never spins forever
+        terminalLog.connection(`Calling connectReader (locationId=${locationId})…`);
+
+        const { reader: connected, error } = await withTimeout(
+          sdkConnectReader({
+            discoveryMethod: 'bluetoothScan',
+            reader,
+            locationId: locationId || 'tml_placeholder',
+            autoReconnectOnUnexpectedDisconnect: true,
+          }),
+          CONNECT_TIMEOUT_MS,
+          'connectReader',
+        );
 
         if (error) {
           terminalLog.error('Connection failed', error);
@@ -293,7 +352,7 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
         terminalLog.error('Connect error', err);
       }
     },
-    [sdkConnectReader]
+    [sdkConnectReader, cancelDiscovering, stripeAccount]
   );
 
   const disconnectReader = useCallback(async () => {
@@ -348,7 +407,8 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
   const collectPayment = useCallback(
     async (
       amountInDollars: number,
-      metadata?: Record<string, string>
+      metadata?: Record<string, string>,
+      isApplicationAmount?: boolean,
     ): Promise<TerminalPaymentResult> => {
       if (connectionStatus !== 'connected') {
         throw new Error('No reader connected. Please connect a reader first.');
@@ -366,6 +426,7 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
           description: metadata?.description || 'Chaffle in-person ticket purchase',
           metadata,
           stripeAccount,
+          isApplicationAmount,
         });
 
         currentPaymentIntentId.current = intentData.id;

@@ -137,6 +137,7 @@ export const stripeApi = {
     description?: string;
     metadata?: Record<string, string>;
     stripeAccount?: string;
+    isApplicationAmount?: boolean;
   }) => {
     const { data, error } = await supabase.functions.invoke('terminal-payment-intent', {
       body: { action: 'create', ...params },
@@ -155,9 +156,9 @@ export const stripeApi = {
   /**
    * Capture a previously authorized Terminal PaymentIntent
    */
-  captureTerminalPayment: async (paymentIntentId: string, _stripeAccount?: string) => {
+  captureTerminalPayment: async (paymentIntentId: string, stripeAccount?: string) => {
     const { data, error } = await supabase.functions.invoke('terminal-payment-intent', {
-      body: { action: 'capture', paymentIntentId },
+      body: { action: 'capture', paymentIntentId, stripeAccount },
     });
     if (error) throw new Error(error.message || 'Failed to capture terminal payment');
     if (data?.error) throw new Error(data.error);
@@ -167,9 +168,9 @@ export const stripeApi = {
   /**
    * Cancel an in-progress Terminal PaymentIntent
    */
-  cancelTerminalPayment: async (paymentIntentId: string, _stripeAccount?: string) => {
+  cancelTerminalPayment: async (paymentIntentId: string, stripeAccount?: string) => {
     const { data, error } = await supabase.functions.invoke('terminal-payment-intent', {
-      body: { action: 'cancel', paymentIntentId },
+      body: { action: 'cancel', paymentIntentId, stripeAccount },
     });
     if (error) throw new Error(error.message || 'Failed to cancel terminal payment');
     if (data?.error) throw new Error(data.error);

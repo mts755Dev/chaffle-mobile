@@ -13,11 +13,16 @@ import { supabase } from './supabase/client';
  *
  * IMPORTANT: Never generate tokens on the client. Always fetch from backend.
  */
-export async function fetchConnectionToken(): Promise<string> {
+export async function fetchConnectionToken(stripeAccount?: string): Promise<string> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+
   try {
+    console.log('[StripeTerminal] Fetching connection token…', stripeAccount ? `(account: ${stripeAccount})` : '(platform)');
+
     const { data, error } = await supabase.functions.invoke(
       'terminal-connection-token',
-      { body: {} },
+      { body: { stripeAccount } },
     );
 
     if (error) {
@@ -32,11 +37,16 @@ export async function fetchConnectionToken(): Promise<string> {
       throw new Error('No secret returned from connection token endpoint');
     }
 
+    console.log('[StripeTerminal] Connection token received');
     return data.secret;
   } catch (err: any) {
-    const msg = err.message || 'Failed to fetch connection token';
+    const msg = err.name === 'AbortError'
+      ? 'Connection token request timed out (15s)'
+      : err.message || 'Failed to fetch connection token';
     console.error('[StripeTerminal] Failed to fetch connection token:', msg);
     throw new Error(msg);
+  } finally {
+    clearTimeout(timeout);
   }
 }
 

@@ -42,6 +42,23 @@ export const stripeApi = {
   },
 
   /**
+   * Send purchase confirmation email to the buyer via Edge Function.
+   * Fire-and-forget — should not block the payment success flow.
+   */
+  sendPurchaseEmail: async (params: {
+    email: string;
+    quantity: number;
+    ticketNumber: string;
+  }) => {
+    const { data, error } = await supabase.functions.invoke('send-purchase-email', {
+      body: params,
+    });
+    if (error) throw new Error(error.message || 'Failed to send confirmation email');
+    if (data?.error) throw new Error(data.error);
+    return data;
+  },
+
+  /**
    * Verify Stripe account (after onboarding)
    */
   verifyStripeAccount: async (stripeAccountId: string) => {

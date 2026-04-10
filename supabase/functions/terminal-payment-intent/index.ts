@@ -17,11 +17,15 @@ async function stripeRequest(
   method: string,
   path: string,
   params?: Record<string, string>,
+  stripeAccount?: string,
 ) {
   const headers: Record<string, string> = {
     Authorization: `Bearer ${Deno.env.get("STRIPE_KEY")}`,
     "Content-Type": "application/x-www-form-urlencoded",
   };
+  if (stripeAccount) {
+    headers["Stripe-Account"] = stripeAccount;
+  }
 
   const res = await fetch(`https://api.stripe.com/v1${path}`, {
     method,
@@ -61,17 +65,14 @@ Deno.serve(async (req: Request) => {
 
       if (description) params.description = description;
 
-      if (stripeAccount) {
-        params["transfer_data[destination]"] = stripeAccount;
-      }
-
       if (metadata) {
         for (const [key, value] of Object.entries(metadata)) {
           params[`metadata[${key}]`] = String(value);
         }
       }
 
-      const pi = await stripeRequest("POST", "/payment_intents", params);
+      // Direct charge: created on the connected account so money goes directly there
+      const pi = await stripeRequest("POST", "/payment_intents", params, stripeAccount);
 
       return jsonResponse({
         id: pi.id,

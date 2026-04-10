@@ -17,7 +17,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.chaffleorg.chaffle",
-      "buildNumber": "10",
+      "buildNumber": "11",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Chaffle needs your location to verify raffle eligibility in your state.",
         "NSCameraUsageDescription": "Chaffle needs camera access to scan QR codes.",

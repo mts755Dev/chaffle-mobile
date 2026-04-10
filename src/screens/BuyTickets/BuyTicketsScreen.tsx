@@ -20,8 +20,8 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';
-import { useStripe } from '@stripe/stripe-react-native';
-import { COLORS } from '../../constants';
+import { StripeProvider, useStripe } from '@stripe/stripe-react-native';
+import { COLORS, STRIPE_PUBLISHABLE_KEY } from '../../constants';
 import { RootStackParamList } from '../../types';
 import { ticketApi } from '../../services/api/raffleApi';
 import { stripeApi } from '../../services/api/stripeApi';
@@ -41,6 +41,21 @@ const buyTicketSchema = z.object({
 type BuyTicketFormData = z.infer<typeof buyTicketSchema>;
 
 export default function BuyTicketsScreen() {
+  const route = useRoute<BuyTicketsRouteProp>();
+  const { donationForm } = route.params;
+  const stripeAccountId = (donationForm.stripeAccount as any)?.id;
+
+  return (
+    <StripeProvider
+      publishableKey={STRIPE_PUBLISHABLE_KEY}
+      stripeAccountId={stripeAccountId}
+    >
+      <BuyTicketsContent />
+    </StripeProvider>
+  );
+}
+
+function BuyTicketsContent() {
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute<BuyTicketsRouteProp>();
   const { raffleId, donationForm } = route.params;
@@ -149,7 +164,14 @@ export default function BuyTicketsScreen() {
       // 5. Payment successful - confirm on backend
       await stripeApi.confirmPaymentSuccess(ticket.id);
 
-      // 6. Navigate to success
+      // 6. Send confirmation email (fire-and-forget, don't block navigation)
+      stripeApi.sendPurchaseEmail({
+        email: formData.email,
+        quantity: selectedQuantity,
+        ticketNumber: ticket.id,
+      }).catch((err) => console.warn('Confirmation email failed:', err.message));
+
+      // 7. Navigate to success
       navigation.replace('PaymentSuccess', {
         ticketId: ticket.id,
         quantity: selectedQuantity,

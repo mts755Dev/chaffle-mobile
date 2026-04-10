@@ -24,6 +24,7 @@ import { StripeTerminalProvider, type Reader } from '@stripe/stripe-terminal-rea
 import { COLORS, TICKET_TIERS } from '../../../constants';
 import { RootStackParamList, DonationForm } from '../../../types';
 import { raffleApi, ticketApi } from '../../../services/api/raffleApi';
+import { stripeApi } from '../../../services/api/stripeApi';
 import { formatCurrency, getPublicIp } from '../../../utils';
 import LoadingScreen from '../../../components/LoadingScreen';
 import ErrorScreen from '../../../components/ErrorScreen';
@@ -202,6 +203,13 @@ function InPersonPaymentContent() {
         paid: true,
         stripeSession: { paymentIntentId: result.paymentIntentId },
       });
+
+      // 5. Send confirmation email (fire-and-forget, don't block success)
+      stripeApi.sendPurchaseEmail({
+        email: buyerEmail,
+        quantity: selectedTier.quantity,
+        ticketNumber: ticket.id,
+      }).catch((err) => console.warn('Confirmation email failed:', err.message));
 
       setSnackMessage(
         `Payment successful! ${selectedTier.quantity} ticket(s) for ${buyerName}`

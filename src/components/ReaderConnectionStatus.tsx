@@ -1,5 +1,5 @@
 /**
- * ReaderConnectionStatus — Displays reader connection status badge.
+ * ReaderConnectionStatus — Displays Tap to Pay connection status.
  */
 
 import React from 'react';
@@ -29,17 +29,17 @@ export default function ReaderConnectionStatus({
 
   const badgeLabel =
     status === 'connected'
-      ? 'Connected'
+      ? 'Ready'
       : status === 'connecting'
-        ? 'Connecting…'
-        : 'Disconnected';
+        ? 'Setting up…'
+        : 'Not Connected';
 
   const iconName =
     status === 'connected'
-      ? 'bluetooth-connect'
+      ? 'cellphone-nfc'
       : status === 'connecting'
-        ? 'bluetooth-settings'
-        : 'bluetooth-off';
+        ? 'cellphone-arrow-down'
+        : 'cellphone-off';
 
   const iconColor =
     status === 'connected'
@@ -48,24 +48,19 @@ export default function ReaderConnectionStatus({
         ? COLORS.warning
         : COLORS.textLight;
 
-  const batteryPercent =
-    reader?.batteryLevel != null
-      ? `${Math.round(reader.batteryLevel * 100)}%`
-      : null;
-
   return (
     <View style={styles.container}>
       <View style={styles.headerRow}>
         <View style={styles.headerLeft}>
           <Icon source={iconName} size={22} color={iconColor} />
           <View style={styles.headerText}>
-            <Text style={styles.title}>Card Reader</Text>
+            <Text style={styles.title}>Tap to Pay</Text>
             <Text style={styles.description}>
               {status === 'connected'
-                ? `Connected to ${reader?.label || reader?.serialNumber || 'M2 Reader'}${reader?.simulated ? ' (Simulated)' : ''}`
+                ? `iPhone is ready to accept payments${reader?.simulated ? ' (Simulated)' : ''}`
                 : status === 'connecting'
-                  ? 'Establishing connection…'
-                  : 'Connect your Stripe M2 reader via Bluetooth'}
+                  ? 'Setting up Tap to Pay…'
+                  : 'Tap to Pay is not connected'}
             </Text>
           </View>
         </View>
@@ -74,20 +69,10 @@ export default function ReaderConnectionStatus({
         </Chip>
       </View>
 
-      {status === 'connected' && reader && (
+      {status === 'connected' && (
         <View style={styles.connectedInfo}>
           <View style={styles.readerDetails}>
-            <Text style={styles.serialLabel}>S/N: {reader.serialNumber}</Text>
-            {batteryPercent && (
-              <View style={styles.batteryRow}>
-                <Icon
-                  source={reader.isCharging != null && reader.isCharging ? 'battery-charging' : 'battery'}
-                  size={16}
-                  color={COLORS.success}
-                />
-                <Text style={styles.batteryText}>{batteryPercent}</Text>
-              </View>
-            )}
+            <Text style={styles.readyLabel}>Accepting contactless payments</Text>
           </View>
           <Button
             mode="outlined"
@@ -117,8 +102,6 @@ const styles = StyleSheet.create({
   badgeText: { fontSize: 11, fontWeight: '600' },
   connectedInfo: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', paddingTop: 4 },
   readerDetails: { gap: 4 },
-  serialLabel: { fontSize: 11, color: COLORS.textSecondary, fontFamily: 'monospace' },
-  batteryRow: { flexDirection: 'row', alignItems: 'center', gap: 4 },
-  batteryText: { fontSize: 12, color: COLORS.success, fontWeight: '600' },
+  readyLabel: { fontSize: 12, color: COLORS.success, fontWeight: '600' },
   disconnectBtn: { borderColor: COLORS.border, borderRadius: 8 },
 });

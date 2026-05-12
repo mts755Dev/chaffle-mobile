@@ -1,15 +1,14 @@
 /**
- * useStripeReader — Custom hook for Stripe Terminal reader lifecycle.
+ * useStripeReader — Custom hook for Stripe Terminal Tap to Pay lifecycle.
  *
- * Manages: discovery → connection → payment collection → processing → cleanup.
- * Uses the official @stripe/stripe-terminal-react-native SDK.
+ * Manages: initialization → discovery → connection → payment collection → cleanup.
+ * Uses the official @stripe/stripe-terminal-react-native SDK with Tap to Pay on iPhone.
  *
  * Set EXPO_PUBLIC_STRIPE_TERMINAL_SIMULATED=true in .env
  * to use a virtual reader for development without physical hardware.
  */
 
 import { useState, useCallback, useRef, useEffect } from 'react';
-import { Platform, PermissionsAndroid } from 'react-native';
 import {
   useStripeTerminal,
   type Reader,
@@ -28,39 +27,6 @@ const RECONNECT_DELAY_MS = 2000;
 const CONNECT_TIMEOUT_MS = 30_000;
 
 /**
- * Request Bluetooth + location permissions required by the Stripe Terminal SDK
- * on Android 12+ (API 31+). Returns true if all granted.
- */
-async function requestBluetoothPermissions(): Promise<boolean> {
-  if (Platform.OS !== 'android') return true;
-
-  try {
-    const permissions = [
-      PermissionsAndroid.PERMISSIONS.BLUETOOTH_SCAN,
-      PermissionsAndroid.PERMISSIONS.BLUETOOTH_CONNECT,
-      PermissionsAndroid.PERMISSIONS.ACCESS_FINE_LOCATION,
-    ];
-
-    const results = await PermissionsAndroid.requestMultiple(permissions);
-
-    const allGranted = Object.values(results).every(
-      (r) => r === PermissionsAndroid.RESULTS.GRANTED
-    );
-
-    if (!allGranted) {
-      terminalLog.error('Bluetooth permissions not fully granted', results);
-    } else {
-      terminalLog.discovery('All Bluetooth permissions granted');
-    }
-
-    return allGranted;
-  } catch (err) {
-    terminalLog.error('Error requesting Bluetooth permissions', err);
-    return false;
-  }
-}
-
-/**
  * Wrap a promise with a timeout. Rejects with a message if not settled in time.
  */
 function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
@@ -73,12 +39,30 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
   });
 }
 
+function isBenignDiscoveryError(error: any): boolean {
+  const code = error?.code ?? '';
+  const nativeCode = error?.nativeErrorCode ?? '';
+  const msg = (error?.message ?? '').toLowerCase();
+  return (
+    code === 'CANCELED' ||
+    code === 'ALREADY_CONNECTED_TO_READER' ||
+    nativeCode === 'USER_ERROR.CANCELED' ||
+    msg.includes('canceled') ||
+    msg.includes('already connected')
+  );
+}
+
 interface UseStripeReaderOptions {
   stripeAccount?: string;
 }
 
 export function useStripeReader(options: UseStripeReaderOptions = {}) {
   const { stripeAccount } = options;
+
+  // Ref to track whether auto-connect is in progress so the
+  // onUpdateDiscoveredReaders callback can trigger connection directly.
+  const autoConnectingRef = useRef(false);
+  const connectToReaderRef = useRef<(reader: Reader.Type) => Promise<void>>(undefined);
 
   const {
     initialize: sdkInitialize,
@@ -98,12 +82,18 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
         readers.map((r) => r.serialNumber)
       );
       setDiscoveredReaders(readers);
+
+      // If auto-connecting, grab the first reader and connect immediately
+      if (autoConnectingRef.current && readers.length > 0) {
+        autoConnectingRef.current = false;
+        connectToReaderRef.current?.(readers[0]);
+      }
     },
     onFinishDiscoveringReaders: (error) => {
       setIsDiscovering(false);
       if (error) {
-        if (error.code === 'CANCELED' || error.nativeErrorCode === 'USER_ERROR.CANCELED') {
-          terminalLog.discovery('Discovery cancelled');
+        if (isBenignDiscoveryError(error)) {
+          terminalLog.discovery('Discovery ended (connecting or already connected)');
           return;
         }
         terminalLog.error('Discovery finished with error', error);
@@ -119,11 +109,11 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
       setConnectionStatus('not_connected');
 
       if (reason === 'disconnectRequested') {
-        terminalLog.connection('Reader disconnected (requested)');
+        terminalLog.connection('Tap to Pay disconnected (requested)');
         return;
       }
 
-      terminalLog.error('Reader disconnected unexpectedly', reason);
+      terminalLog.error('Tap to Pay disconnected unexpectedly', reason);
       handleAutoReconnect();
     },
     onDidRequestReaderInput: (inputOptions) => {
@@ -132,18 +122,18 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
     onDidRequestReaderDisplayMessage: (message) => {
       terminalLog.payment(`Reader display message: ${message}`);
     },
-    onDidStartReaderReconnect: (reader) => {
-      terminalLog.connection(`Reconnecting to ${reader.serialNumber}…`);
+    onDidStartReaderReconnect: () => {
+      terminalLog.connection('Reconnecting Tap to Pay…');
       setConnectionStatus('connecting');
     },
     onDidSucceedReaderReconnect: (reader) => {
-      terminalLog.connection(`Reconnected to ${reader.serialNumber}`);
+      terminalLog.connection('Tap to Pay reconnected');
       setConnectedReader(reader);
       setConnectionStatus('connected');
       reconnectAttempts.current = 0;
     },
-    onDidFailReaderReconnect: (reader) => {
-      terminalLog.error(`Failed to reconnect to ${reader.serialNumber}`);
+    onDidFailReaderReconnect: () => {
+      terminalLog.error('Failed to reconnect Tap to Pay');
       setConnectedReader(null);
       setConnectionStatus('not_connected');
     },
@@ -165,7 +155,6 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
   const initPromiseRef = useRef<Promise<boolean> | null>(null);
   const isDiscoveringRef = useRef(false);
 
-  // Keep ref in sync with state so async functions always read the latest value
   useEffect(() => {
     isDiscoveringRef.current = isDiscovering;
   }, [isDiscovering]);
@@ -206,12 +195,11 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
     return promise;
   }, [sdkReady, isInitialized, sdkInitialize]);
 
-  // Auto-initialize on mount
   useEffect(() => {
     ensureInitialized();
   }, [ensureInitialized]);
 
-  // ── Reader Discovery ───────────────────────────────────────────────
+  // ── Tap to Pay Discovery ──────────────────────────────────────────
 
   const discoverReaders = useCallback(async () => {
     const ready = await ensureInitialized();
@@ -220,39 +208,26 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
       return;
     }
 
-    const hasPermissions = await requestBluetoothPermissions();
-    if (!hasPermissions) {
-      setPaymentError('Bluetooth permissions are required to scan for readers. Please grant them in Settings.');
-      return;
-    }
-
     try {
       setIsDiscovering(true);
       setDiscoveredReaders([]);
       setPaymentError(null);
       terminalLog.discovery(
-        `Starting Bluetooth scan${STRIPE_TERMINAL_SIMULATED ? ' (simulated)' : ''}…`
+        `Starting Tap to Pay discovery${STRIPE_TERMINAL_SIMULATED ? ' (simulated)' : ''}…`
       );
 
       const { error } = await sdkDiscoverReaders({
-        discoveryMethod: 'bluetoothScan',
+        discoveryMethod: 'tapToPay',
         simulated: STRIPE_TERMINAL_SIMULATED,
       });
 
-      if (error) {
-        if (error.code === 'CANCELED' || error.nativeErrorCode === 'USER_ERROR.CANCELED') {
-          terminalLog.discovery('Discovery cancelled by user');
-          return;
-        }
+      if (error && !isBenignDiscoveryError(error)) {
         terminalLog.error('Discovery failed', error);
-        throw new Error(error.message || 'Failed to discover readers');
+        throw new Error(error.message || 'Failed to discover Tap to Pay reader');
       }
     } catch (err: any) {
-      if (err.message?.includes('canceled')) {
-        terminalLog.discovery('Discovery cancelled by user');
-        return;
-      }
-      setPaymentError(err.message || 'Failed to scan for readers');
+      if (err.message?.toLowerCase().includes('canceled')) return;
+      setPaymentError(err.message || 'Failed to set up Tap to Pay');
       terminalLog.error('Discovery error', err);
     } finally {
       setIsDiscovering(false);
@@ -269,16 +244,15 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
     }
   }, [cancelDiscovering]);
 
-  // ── Reader Connection ──────────────────────────────────────────────
+  // ── Tap to Pay Connection ─────────────────────────────────────────
 
   const connectToReader = useCallback(
     async (reader: Reader.Type) => {
       try {
         setConnectionStatus('connecting');
         setPaymentError(null);
-        terminalLog.connection(`Connecting to ${reader.serialNumber}…`);
+        terminalLog.connection('Connecting Tap to Pay…');
 
-        // 1. Cancel any active discovery — SDK requires discovery to be stopped before connecting
         if (isDiscoveringRef.current) {
           terminalLog.connection('Cancelling active discovery before connecting…');
           try {
@@ -287,44 +261,35 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
           } catch {
             // Discovery may already be finished
           }
-          // Brief pause to let the native SDK finish cleanup
-          await new Promise((r) => setTimeout(r, 500));
+          await new Promise((r) => setTimeout(r, 300));
         }
 
-        // 2. Resolve a valid locationId (required for Bluetooth readers)
         let locationId = reader.locationId ?? reader.location?.id;
 
         if (!locationId && !STRIPE_TERMINAL_SIMULATED) {
-          terminalLog.connection('Reader has no location — fetching location…');
+          terminalLog.connection('No location on reader — fetching one…');
           try {
-            // Location is on the connected account for direct charges
             locationId = await withTimeout(
               stripeApi.getOrCreateTerminalLocation(stripeAccount),
               10_000,
               'getOrCreateTerminalLocation',
             );
-            terminalLog.connection(`Using location: ${locationId}`);
           } catch (locErr: any) {
             terminalLog.error('Failed to get terminal location', locErr);
             throw new Error(
               `Could not get a Terminal location: ${locErr.message}. ` +
-              'Ensure the reader is registered to a Stripe location in the Dashboard.'
+              'Ensure a location exists in the Stripe Dashboard.'
             );
           }
         }
 
         if (!locationId && !STRIPE_TERMINAL_SIMULATED) {
-          throw new Error(
-            'No location ID available. Register the reader to a location in the Stripe Dashboard.'
-          );
+          throw new Error('No location ID available. Create one in the Stripe Dashboard.');
         }
-
-        // 3. Connect with a timeout so the UI never spins forever
-        terminalLog.connection(`Calling connectReader (locationId=${locationId})…`);
 
         const { reader: connected, error } = await withTimeout(
           sdkConnectReader({
-            discoveryMethod: 'bluetoothScan',
+            discoveryMethod: 'tapToPay',
             reader,
             locationId: locationId || 'tml_placeholder',
             autoReconnectOnUnexpectedDisconnect: true,
@@ -334,13 +299,13 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
         );
 
         if (error) {
-          terminalLog.error('Connection failed', error);
+          terminalLog.error('Tap to Pay connection failed', error);
           setConnectionStatus('not_connected');
-          throw new Error(error.message || 'Failed to connect to reader');
+          throw new Error(error.message || 'Failed to connect Tap to Pay');
         }
 
         if (connected) {
-          terminalLog.connection(`Connected to ${connected.serialNumber}`);
+          terminalLog.connection('Tap to Pay connected successfully');
           setConnectedReader(connected);
           lastConnectedReader.current = connected;
           setConnectionStatus('connected');
@@ -348,22 +313,75 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
         }
       } catch (err: any) {
         setConnectionStatus('not_connected');
-        setPaymentError(err.message || 'Connection failed');
+        setPaymentError(err.message || 'Tap to Pay connection failed');
         terminalLog.error('Connect error', err);
       }
     },
     [sdkConnectReader, cancelDiscovering, stripeAccount]
   );
 
+  // Keep the ref in sync so the SDK callback can call connectToReader
+  useEffect(() => {
+    connectToReaderRef.current = connectToReader;
+  }, [connectToReader]);
+
+  /**
+   * Auto-connect: discover the Tap to Pay reader and connect in one step.
+   * Sets a ref flag so that onUpdateDiscoveredReaders triggers connection
+   * directly, avoiding the race condition with useEffect.
+   */
+  const autoConnect = useCallback(async () => {
+    if (connectedReader || connectionStatus === 'connected') {
+      terminalLog.connection('Already connected — skipping auto-connect');
+      return;
+    }
+
+    const ready = await ensureInitialized();
+    if (!ready) {
+      setPaymentError('Failed to initialize Terminal SDK. Please restart the app.');
+      return;
+    }
+
+    autoConnectingRef.current = true;
+    setConnectionStatus('connecting');
+    setPaymentError(null);
+    terminalLog.connection('Starting Tap to Pay auto-connect…');
+
+    try {
+      setIsDiscovering(true);
+      setDiscoveredReaders([]);
+
+      const { error } = await sdkDiscoverReaders({
+        discoveryMethod: 'tapToPay',
+        simulated: STRIPE_TERMINAL_SIMULATED,
+      });
+
+      if (error && !isBenignDiscoveryError(error)) {
+        throw new Error(error.message || 'Failed to discover Tap to Pay reader');
+      }
+    } catch (err: any) {
+      if (err.message?.toLowerCase().includes('canceled') ||
+          err.message?.toLowerCase().includes('already connected')) {
+        return;
+      }
+      autoConnectingRef.current = false;
+      setPaymentError(err.message || 'Failed to set up Tap to Pay');
+      setConnectionStatus('not_connected');
+      terminalLog.error('Auto-connect discovery error', err);
+    } finally {
+      setIsDiscovering(false);
+    }
+  }, [connectedReader, connectionStatus, ensureInitialized, sdkDiscoverReaders]);
+
   const disconnectReader = useCallback(async () => {
     try {
-      terminalLog.connection('Disconnecting reader…');
+      terminalLog.connection('Disconnecting Tap to Pay…');
       await sdkDisconnectReader();
       setConnectedReader(null);
       lastConnectedReader.current = null;
       setConnectionStatus('not_connected');
       setDiscoveredReaders([]);
-      terminalLog.connection('Reader disconnected');
+      terminalLog.connection('Tap to Pay disconnected');
     } catch (err: any) {
       terminalLog.error('Disconnect error', err);
     }
@@ -376,7 +394,7 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
     if (!reader || reconnectAttempts.current >= MAX_RECONNECT_ATTEMPTS) {
       if (reconnectAttempts.current >= MAX_RECONNECT_ATTEMPTS) {
         terminalLog.error(`Auto-reconnect failed after ${MAX_RECONNECT_ATTEMPTS} attempts`);
-        setPaymentError('Reader disconnected. Please reconnect manually.');
+        setPaymentError('Tap to Pay disconnected. Please try reconnecting.');
       }
       return;
     }
@@ -397,13 +415,6 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
 
   // ── Payment Flow ───────────────────────────────────────────────────
 
-  /**
-   * Full payment lifecycle:
-   *   1. Create PaymentIntent on backend (card_present)
-   *   2. Retrieve PaymentIntent in SDK
-   *   3. Collect payment method via the connected reader
-   *   4. Confirm payment
-   */
   const collectPayment = useCallback(
     async (
       amountInDollars: number,
@@ -411,11 +422,10 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
       isApplicationAmount?: boolean,
     ): Promise<TerminalPaymentResult> => {
       if (connectionStatus !== 'connected') {
-        throw new Error('No reader connected. Please connect a reader first.');
+        throw new Error('Tap to Pay is not ready. Please wait for connection.');
       }
 
       try {
-        // Step 1: Create PaymentIntent on backend
         setPaymentStatus('creating_intent');
         setPaymentError(null);
         setPaymentResult(null);
@@ -432,7 +442,6 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
         currentPaymentIntentId.current = intentData.id;
         terminalLog.payment(`PaymentIntent created: ${intentData.id}`);
 
-        // Step 2: Retrieve PaymentIntent in SDK
         const { paymentIntent: retrievedPI, error: retrieveError } =
           await retrievePaymentIntent(intentData.client_secret);
 
@@ -441,7 +450,7 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
         }
 
         setPaymentStatus('waiting_for_input');
-        terminalLog.payment('Waiting for card tap/insert…');
+        terminalLog.payment('Waiting for card tap…');
 
         const { paymentIntent: collectedPI, error: collectError } =
           await collectPaymentMethod({ paymentIntent: retrievedPI });
@@ -450,7 +459,6 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
           throw new Error(collectError?.message || 'Failed to collect payment method');
         }
 
-        // Step 4: Confirm payment
         setPaymentStatus('processing');
         terminalLog.payment('Confirming payment…');
 
@@ -533,6 +541,7 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
     connectedReader,
     connectionStatus,
     connectToReader,
+    autoConnect,
     disconnectReader,
     paymentStatus,
     paymentResult,

@@ -94,7 +94,7 @@ export default function AdminDashboardScreen() {
         text: 'Logout',
         onPress: async () => {
           await logout();
-          navigation.navigate('MainTabs');
+          navigation.navigate('MainTabs', { screen: 'Home' });
         },
       },
     ]);
@@ -207,7 +207,7 @@ export default function AdminDashboardScreen() {
         {filteredForms.map((form) => {
           const total = getTicketTotal(form.id);
           const completed = isCompleted(form.id);
-          const hasStripe = !!(form.stripeAccount as any)?.charges_enabled;
+          const hasStripe = !!(form.stripeAccount as any)?.id;
 
           return (
             <Card key={form.id} style={styles.raffleCard}>

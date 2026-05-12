@@ -124,6 +124,7 @@ export default function RaffleScreen() {
     ? new Date(donationForm.draw_date) < new Date()
     : false;
 
+
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       {/* 50/50 RAFFLE heading — serif uppercase, like web */}
@@ -183,8 +184,8 @@ export default function RaffleScreen() {
         </View>
       </View>
 
-      {/* Buy Tickets & Terms — like web */}
-      {!isExpired && !winnerTicket && (
+      {/* Buy Tickets & Terms — like web (show as long as no winner, regardless of expiry) */}
+      {!winnerTicket && (
         <View style={styles.actions}>
           <Button
             mode="contained"

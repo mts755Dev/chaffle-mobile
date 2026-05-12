@@ -5,6 +5,7 @@ import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Icon } from 'react-native-paper';
 import { COLORS } from '../constants';
 import { RootStackParamList, MainTabParamList } from '../types';
+import { useAuthStore } from '../store/authStore';
 
 // Screens
 import HomeScreen from '../screens/Home/HomeScreen';
@@ -29,8 +30,20 @@ const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
 
 function MainTabs() {
+  const { isAdmin, logout } = useAuthStore();
+
   return (
     <Tab.Navigator
+      screenListeners={({ route, navigation }) => ({
+        focus: () => {
+          if (isAdmin) {
+            logout();
+            if (route.name === 'AdminLogin') {
+              navigation.navigate('Home');
+            }
+          }
+        },
+      })}
       screenOptions={{
         tabBarActiveTintColor: COLORS.primary,
         tabBarInactiveTintColor: COLORS.textLight,

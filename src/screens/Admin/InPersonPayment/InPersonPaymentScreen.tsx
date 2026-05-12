@@ -20,7 +20,7 @@ import {
 } from 'react-native-paper';
 import { useRoute, RouteProp, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { StripeTerminalProvider, type Reader } from '@stripe/stripe-terminal-react-native';
+import { StripeTerminalProvider } from '@stripe/stripe-terminal-react-native';
 import { COLORS, TICKET_TIERS } from '../../../constants';
 import { RootStackParamList, DonationForm } from '../../../types';
 import { raffleApi, ticketApi } from '../../../services/api/raffleApi';
@@ -29,8 +29,6 @@ import { formatCurrency, getPublicIp } from '../../../utils';
 import LoadingScreen from '../../../components/LoadingScreen';
 import ErrorScreen from '../../../components/ErrorScreen';
 import { useStripeReader } from '../../../hooks/useStripeReader';
-import ReaderScanner from '../../../components/ReaderScanner';
-import ReaderList from '../../../components/ReaderList';
 import ReaderConnectionStatus from '../../../components/ReaderConnectionStatus';
 import PaymentStatusOverlay from '../../../components/PaymentStatus';
 import { fetchConnectionToken } from '../../../services/stripeTerminal';
@@ -98,9 +96,6 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
   const navigation = useNavigation<NavigationProp>();
   const { id } = route.params;
 
-  // Reader selection (UI state for selecting before connecting)
-  const [selectedReader, setSelectedReader] = useState<Reader.Type | null>(null);
-
   // Ticket selection
   const [selectedTier, setSelectedTier] = useState<{ price: number; quantity: number } | null>(null);
   const [platformFee, setPlatformFee] = useState(true);
@@ -121,13 +116,9 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
   const stripeAccountId = (raffle.stripeAccount as any)?.id as string | undefined;
 
   const {
-    discoveredReaders,
-    isDiscovering,
-    discoverReaders,
-    cancelDiscovery,
     connectedReader,
     connectionStatus,
-    connectToReader,
+    autoConnect,
     disconnectReader,
     paymentStatus,
     paymentResult,
@@ -137,22 +128,12 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
     resetPayment,
   } = useStripeReader({ stripeAccount: stripeAccountId });
 
-  // ── Reader handlers ─────────────────────────────────────────────────
-  const handleDiscover = () => {
-    setSelectedReader(null);
-    discoverReaders();
-  };
-
-  const handleConnect = async () => {
-    if (!selectedReader) {
-      Alert.alert('Select a Reader', 'Please select a reader from the list first');
-      return;
+  // Auto-connect Tap to Pay when screen mounts
+  useEffect(() => {
+    if (connectionStatus === 'not_connected') {
+      autoConnect();
     }
-    if (isDiscovering) {
-      await cancelDiscovery();
-    }
-    connectToReader(selectedReader);
-  };
+  }, []);
 
   // ── Step navigation ─────────────────────────────────────────────────
   const handleProceedToDetails = () => {
@@ -177,7 +158,7 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
     if (!selectedTier) return;
 
     if (connectionStatus !== 'connected') {
-      Alert.alert('No Reader', 'Please connect a card reader first');
+      Alert.alert('Not Ready', 'Tap to Pay is not connected. Please wait or tap Reconnect.');
       return;
     }
 
@@ -269,14 +250,14 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
         <View style={styles.header}>
           <Text style={styles.heading}>In-Person Payment</Text>
           <Text style={styles.subtitle}>
-            Accept card payments using Stripe Terminal
+            Accept card payments using Tap to Pay on iPhone
           </Text>
           <Text style={styles.raffleName}>
             Raffle: {raffle.title || 'Untitled Raffle'}
           </Text>
         </View>
 
-        {/* ── Card Reader Connection ──────────────────────────────── */}
+        {/* ── Tap to Pay Connection Status ─────────────────────────── */}
         <Card style={styles.readerCard}>
           <Card.Content>
             <ReaderConnectionStatus
@@ -285,27 +266,18 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
               onDisconnect={disconnectReader}
             />
 
-            <Divider style={styles.readerDivider} />
-
-            {!isConnected && (
-              <View>
-                <ReaderScanner
-                  isDiscovering={isDiscovering}
-                  onDiscover={handleDiscover}
-                  onCancel={cancelDiscovery}
-                  disabled={connectionStatus === 'connecting'}
-                />
-
-                {discoveredReaders.length > 0 && (
-                  <ReaderList
-                    readers={discoveredReaders}
-                    selectedReader={selectedReader}
-                    onSelectReader={setSelectedReader}
-                    onConnect={handleConnect}
-                    isConnecting={connectionStatus === 'connecting'}
-                  />
-                )}
-              </View>
+            {!isConnected && connectionStatus !== 'connecting' && (
+              <>
+                <Divider style={styles.readerDivider} />
+                <Button
+                  mode="outlined"
+                  icon="cellphone-nfc"
+                  onPress={autoConnect}
+                  style={{ borderColor: COLORS.border, borderRadius: 8 }}
+                >
+                  Reconnect Tap to Pay
+                </Button>
+              </>
             )}
           </Card.Content>
         </Card>
@@ -542,12 +514,11 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
               How to use:
             </Text>
             {[
-              'Turn on your Stripe M2 reader and ensure Bluetooth is enabled',
-              'Tap "Find Readers" to scan for nearby readers',
-              'Select the reader and tap "Connect"',
+              'Tap to Pay connects automatically when this screen opens',
               'Select the ticket package for the customer',
               "Enter the buyer's details (name, email, phone, address)",
-              'Tap "Collect" — the customer taps or inserts their card on the M2',
+              'Tap "Collect" — hold the customer\'s card near the top of your iPhone',
+              'Keep the card near the phone until the payment is confirmed',
             ].map((step, i) => (
               <View key={i} style={styles.instructionRow}>
                 <Text style={styles.instructionNum}>{i + 1}.</Text>

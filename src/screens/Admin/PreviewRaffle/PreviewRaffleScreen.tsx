@@ -122,7 +122,8 @@ export default function PreviewRaffleScreen() {
   const isExpired = donationForm.draw_date
     ? new Date(donationForm.draw_date) < new Date()
     : false;
-  const hasStripe = !!(donationForm.stripeAccount as any)?.charges_enabled;
+  const stripeAccountId = (donationForm.stripeAccount as any)?.id;
+  const hasStripe = !!stripeAccountId;
 
   /* ---------------------------------------------------------------- */
   /*  Render                                                          */
@@ -303,7 +304,7 @@ export default function PreviewRaffleScreen() {
         </View>
 
         {/* ─── Buy Tickets (like web's PaymentDialog) ────────────── */}
-        {!isExpired && !winnerTicket && hasStripe && (
+        {!winnerTicket && (
           <View style={styles.section}>
             <Button
               mode="contained"

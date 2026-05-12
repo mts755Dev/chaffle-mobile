@@ -36,22 +36,27 @@ export default function AdminLoginScreen() {
   const {
     control,
     handleSubmit,
+    reset,
     formState: { errors },
   } = useForm<LoginFormData>({
     resolver: zodResolver(loginSchema),
     defaultValues: { email: '', password: '' },
   });
 
-  // If already logged in, go to dashboard
   useEffect(() => {
     if (isAdmin) {
       navigation.navigate('AdminDashboard');
+    } else {
+      reset();
+      setShowPassword(false);
     }
   }, [isAdmin]);
 
   const onSubmit = async (data: LoginFormData) => {
     await login(data.email, data.password);
   };
+
+  if (isAdmin) return <View style={styles.flex} />;
 
   return (
     <KeyboardAvoidingView

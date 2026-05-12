@@ -17,12 +17,10 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.chaffleorg.chaffle",
-      "buildNumber": "12",
+      "buildNumber": "16",
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Chaffle needs your location to verify raffle eligibility in your state.",
         "NSCameraUsageDescription": "Chaffle needs camera access to scan QR codes.",
-        "NSBluetoothAlwaysUsageDescription": "Chaffle uses Bluetooth to connect to the Stripe Reader M2 for in-person payments.",
-        "NSBluetoothPeripheralUsageDescription": "Chaffle uses Bluetooth to communicate with the Stripe Reader M2.",
         "ITSAppUsesNonExemptEncryption": false
       }
     },
@@ -37,10 +35,6 @@
         "ACCESS_FINE_LOCATION",
         "ACCESS_COARSE_LOCATION",
         "CAMERA",
-        "BLUETOOTH",
-        "BLUETOOTH_ADMIN",
-        "BLUETOOTH_CONNECT",
-        "BLUETOOTH_SCAN",
         "android.permission.ACCESS_COARSE_LOCATION",
         "android.permission.ACCESS_FINE_LOCATION"
       ]
@@ -63,7 +57,7 @@
       [
         "@stripe/stripe-terminal-react-native",
         {
-          "bluetoothBackgroundMode": true
+          "bluetoothBackgroundMode": false
         }
       ],
       [

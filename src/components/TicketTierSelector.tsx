@@ -66,7 +66,13 @@ const styles = StyleSheet.create({
     borderColor: 'transparent',
   },
   tierSelected: {
-    borderColor: COLORS.black,
+    backgroundColor: '#ff9900',
+    borderColor: '#ff9900',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
   },
   quantityText: {
     fontSize: 13,

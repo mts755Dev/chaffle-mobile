@@ -18,45 +18,44 @@ import { useAuthStore } from '../../store/authStore';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
-const loginSchema = z.object({
+const signupSchema = z.object({
+  organizationName: z.string().min(2, 'Organization name must be at least 2 characters'),
   email: z.string().email('Invalid email address'),
   password: z.string().regex(
     PASSWORD_REGEX,
     'Password must contain: uppercase, lowercase, number, special character, and be at least 8 characters'
   ),
+  confirmPassword: z.string(),
+}).refine((data) => data.password === data.confirmPassword, {
+  message: 'Passwords do not match',
+  path: ['confirmPassword'],
 });
 
-type LoginFormData = z.infer<typeof loginSchema>;
+type SignupFormData = z.infer<typeof signupSchema>;
 
-export default function AdminLoginScreen() {
+export default function AdminSignupScreen() {
   const navigation = useNavigation<NavigationProp>();
-  const { login, isAdmin, isLoading, error, clearError } = useAuthStore();
+  const { signup, isAdmin, isLoading, error, clearError } = useAuthStore();
   const [showPassword, setShowPassword] = useState(false);
 
   const {
     control,
     handleSubmit,
-    reset,
     formState: { errors },
-  } = useForm<LoginFormData>({
-    resolver: zodResolver(loginSchema),
-    defaultValues: { email: '', password: '' },
+  } = useForm<SignupFormData>({
+    resolver: zodResolver(signupSchema),
+    defaultValues: { organizationName: '', email: '', password: '', confirmPassword: '' },
   });
 
   useEffect(() => {
     if (isAdmin) {
       navigation.navigate('AdminDashboard');
-    } else {
-      reset();
-      setShowPassword(false);
     }
   }, [isAdmin]);
 
-  const onSubmit = async (data: LoginFormData) => {
-    await login(data.email, data.password);
+  const onSubmit = async (data: SignupFormData) => {
+    await signup(data.email, data.password, data.organizationName);
   };
-
-  if (isAdmin) return <View style={styles.flex} />;
 
   return (
     <KeyboardAvoidingView
@@ -69,12 +68,34 @@ export default function AdminLoginScreen() {
         keyboardShouldPersistTaps="handled"
       >
         <View style={styles.header}>
-          <Icon source="shield-account" size={64} color={COLORS.primary} />
-          <Text style={styles.title}>Admin Login</Text>
+          <Icon source="domain" size={64} color={COLORS.primary} />
+          <Text style={styles.title}>Organization Signup</Text>
           <Text style={styles.subtitle}>
-            Sign in to manage raffles and tickets
+            Create an account to manage your raffles
           </Text>
         </View>
+
+        <Controller
+          control={control}
+          name="organizationName"
+          render={({ field: { onChange, value } }) => (
+            <TextInput
+              mode="outlined"
+              label="Organization Name"
+              value={value}
+              onChangeText={onChange}
+              autoCapitalize="words"
+              error={!!errors.organizationName}
+              style={styles.input}
+              outlineColor={COLORS.border}
+              activeOutlineColor={COLORS.primary}
+              left={<TextInput.Icon icon="domain" />}
+            />
+          )}
+        />
+        {errors.organizationName && (
+          <Text style={styles.errorText}>{errors.organizationName.message}</Text>
+        )}
 
         <Controller
           control={control}
@@ -125,7 +146,28 @@ export default function AdminLoginScreen() {
           <Text style={styles.errorText}>{errors.password.message}</Text>
         )}
 
-        {/* Password requirements hint */}
+        <Controller
+          control={control}
+          name="confirmPassword"
+          render={({ field: { onChange, value } }) => (
+            <TextInput
+              mode="outlined"
+              label="Confirm Password"
+              value={value}
+              onChangeText={onChange}
+              secureTextEntry={!showPassword}
+              error={!!errors.confirmPassword}
+              style={styles.input}
+              outlineColor={COLORS.border}
+              activeOutlineColor={COLORS.primary}
+              left={<TextInput.Icon icon="lock-check" />}
+            />
+          )}
+        />
+        {errors.confirmPassword && (
+          <Text style={styles.errorText}>{errors.confirmPassword.message}</Text>
+        )}
+
         <View style={styles.requirements}>
           <Text style={styles.requirementsTitle}>Password must contain:</Text>
           {[
@@ -146,23 +188,21 @@ export default function AdminLoginScreen() {
           onPress={handleSubmit(onSubmit)}
           loading={isLoading}
           disabled={isLoading}
-          style={styles.loginButton}
-          contentStyle={styles.loginContent}
-          icon="login"
+          style={styles.signupButton}
+          contentStyle={styles.signupContent}
+          icon="account-plus"
         >
-          {isLoading ? 'Signing in...' : 'Sign In'}
+          {isLoading ? 'Creating Account...' : 'Sign Up'}
         </Button>
 
         <Button
           mode="text"
-          onPress={() => navigation.navigate('AdminSignup')}
-          style={styles.signupLink}
+          onPress={() => navigation.goBack()}
+          style={styles.backButton}
           textColor={COLORS.primary}
-          icon="domain"
         >
-          Sign Up as Organization
+          Already have an account? Sign In
         </Button>
-
       </ScrollView>
 
       <Snackbar
@@ -185,11 +225,11 @@ const styles = StyleSheet.create({
   },
   header: {
     alignItems: 'center',
-    marginBottom: 32,
-    marginTop: 32,
+    marginBottom: 24,
+    marginTop: 16,
   },
   title: {
-    fontSize: 28,
+    fontSize: 26,
     fontWeight: 'bold',
     color: COLORS.primary,
     marginTop: 16,
@@ -198,6 +238,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: COLORS.textSecondary,
     marginTop: 4,
+    textAlign: 'center',
   },
   input: {
     backgroundColor: COLORS.surface,
@@ -228,14 +269,14 @@ const styles = StyleSheet.create({
     marginLeft: 8,
     lineHeight: 18,
   },
-  loginButton: {
+  signupButton: {
     backgroundColor: COLORS.primary,
     borderRadius: 12,
   },
-  loginContent: {
+  signupContent: {
     paddingVertical: 8,
   },
-  signupLink: {
+  backButton: {
     marginTop: 12,
   },
   snackbar: {

@@ -31,3 +31,5 @@ Thumbs.db
 
 # Metro
 .metro-health-check*
+
+credentials.json

@@ -30,7 +30,7 @@ type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 export default function AdminDashboardScreen() {
   const navigation = useNavigation<NavigationProp>();
-  const { logout } = useAuthStore();
+  const { logout, role, organizationId, organizationName } = useAuthStore();
   const {
     forms,
     ticketTotals,
@@ -42,6 +42,8 @@ export default function AdminDashboardScreen() {
     fetchCompletedRaffleIds,
     createForm,
   } = useRaffleStore();
+
+  const isOrgAdmin = role === 'org_admin';
 
   const [refreshing, setRefreshing] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
@@ -62,10 +64,15 @@ export default function AdminDashboardScreen() {
   );
 
   const loadData = async () => {
+    const orgId = isOrgAdmin ? organizationId : undefined;
+    await fetchForms(orgId);
+    const { forms: loadedForms } = useRaffleStore.getState();
+    const raffleIds = isOrgAdmin
+      ? loadedForms.map((f) => f.id)
+      : undefined;
     await Promise.all([
-      fetchForms(),
-      fetchTicketTotals(),
-      fetchCompletedRaffleIds(),
+      fetchTicketTotals(undefined, raffleIds),
+      fetchCompletedRaffleIds(raffleIds),
     ]);
   };
 
@@ -78,7 +85,7 @@ export default function AdminDashboardScreen() {
   const handleCreateRaffle = async () => {
     setIsCreating(true);
     try {
-      const newForm = await createForm();
+      const newForm = await createForm(isOrgAdmin ? organizationId : undefined);
       navigation.navigate('EditRaffle', { id: newForm.id });
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Failed to create raffle');
@@ -94,7 +101,7 @@ export default function AdminDashboardScreen() {
         text: 'Logout',
         onPress: async () => {
           await logout();
-          navigation.navigate('MainTabs', { screen: 'Home' });
+          navigation.navigate('MainTabs' as any);
         },
       },
     ]);
@@ -173,8 +180,14 @@ export default function AdminDashboardScreen() {
           }
         />
 
+        {isOrgAdmin && organizationName && (
+          <Text style={styles.orgBanner}>
+            {organizationName}
+          </Text>
+        )}
+
         <Text style={styles.sectionTitle}>
-          Raffles ({filteredForms.length})
+          {isOrgAdmin ? 'My Raffles' : 'All Raffles'} ({filteredForms.length})
         </Text>
 
         {storeError && (
@@ -325,6 +338,12 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.white,
     marginBottom: 14,
     fontSize: 14,
+  },
+  orgBanner: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: COLORS.textSecondary,
+    marginBottom: 4,
   },
   sectionTitle: {
     fontSize: 20,

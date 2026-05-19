@@ -10,12 +10,11 @@ interface RaffleState {
   isLoading: boolean;
   error: string | null;
 
-  // Actions
-  fetchForms: () => Promise<void>;
+  fetchForms: (organizationId?: string | null) => Promise<void>;
   fetchFormById: (id: string) => Promise<DonationForm | null>;
-  fetchTicketTotals: (raffleId?: string) => Promise<TicketTotalByRaffle[]>;
-  fetchCompletedRaffleIds: () => Promise<void>;
-  createForm: () => Promise<DonationForm>;
+  fetchTicketTotals: (raffleId?: string, raffleIds?: string[]) => Promise<TicketTotalByRaffle[]>;
+  fetchCompletedRaffleIds: (raffleIds?: string[]) => Promise<void>;
+  createForm: (organizationId?: string | null) => Promise<DonationForm>;
   updateForm: (payload: Partial<DonationForm> & { id: string }) => Promise<void>;
   deleteForm: (id: string) => Promise<void>;
   setCurrentForm: (form: DonationForm | null) => void;
@@ -30,10 +29,10 @@ export const useRaffleStore = create<RaffleState>((set, get) => ({
   isLoading: false,
   error: null,
 
-  fetchForms: async () => {
+  fetchForms: async (organizationId?: string | null) => {
     set({ isLoading: true, error: null });
     try {
-      const forms = await raffleApi.getDonationForms();
+      const forms = await raffleApi.getDonationForms(organizationId);
       set({ forms, isLoading: false });
     } catch (err: any) {
       set({ error: err.message, isLoading: false });
@@ -52,9 +51,9 @@ export const useRaffleStore = create<RaffleState>((set, get) => ({
     }
   },
 
-  fetchTicketTotals: async (raffleId?: string) => {
+  fetchTicketTotals: async (raffleId?: string, raffleIds?: string[]) => {
     try {
-      const totals = await raffleApi.getTicketsAmountByRaffle(raffleId);
+      const totals = await raffleApi.getTicketsAmountByRaffle(raffleId, raffleIds);
       set({ ticketTotals: totals });
       return totals;
     } catch {
@@ -62,19 +61,19 @@ export const useRaffleStore = create<RaffleState>((set, get) => ({
     }
   },
 
-  fetchCompletedRaffleIds: async () => {
+  fetchCompletedRaffleIds: async (raffleIds?: string[]) => {
     try {
-      const ids = await raffleApi.getCompletedRaffleIds();
+      const ids = await raffleApi.getCompletedRaffleIds(raffleIds);
       set({ completedRaffleIds: ids });
     } catch {
       // Silently fail
     }
   },
 
-  createForm: async () => {
+  createForm: async (organizationId?: string | null) => {
     set({ isLoading: true, error: null });
     try {
-      const form = await raffleApi.createDonationForm();
+      const form = await raffleApi.createDonationForm(organizationId);
       set((state) => ({
         forms: [...state.forms, form],
         isLoading: false,

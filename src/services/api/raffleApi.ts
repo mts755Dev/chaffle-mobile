@@ -18,11 +18,17 @@ import {
 // We can use Supabase client directly for reads since the data is in Supabase/Postgres
 
 export const raffleApi = {
-  // Get all donation forms (admin)
-  getDonationForms: async (): Promise<DonationForm[]> => {
-    const { data, error } = await supabase
+  // Get all donation forms (admin) — optionally filtered by organization
+  getDonationForms: async (organizationId?: string | null): Promise<DonationForm[]> => {
+    let query = supabase
       .from('donation_form')
       .select('*, ticket(count)');
+
+    if (organizationId) {
+      query = query.eq('organization_id', organizationId);
+    }
+
+    const { data, error } = await query;
     if (error) throw error;
     return (data || []).map((d: any) => ({
       ...d,
@@ -42,7 +48,7 @@ export const raffleApi = {
   },
 
   // Get ticket totals by raffle (sum of paid tickets)
-  getTicketsAmountByRaffle: async (raffleId?: string): Promise<TicketTotalByRaffle[]> => {
+  getTicketsAmountByRaffle: async (raffleId?: string, raffleIds?: string[]): Promise<TicketTotalByRaffle[]> => {
     let query = supabase
       .from('ticket')
       .select('donation_formId, amount, quantity')
@@ -50,12 +56,13 @@ export const raffleApi = {
 
     if (raffleId) {
       query = query.eq('donation_formId', raffleId);
+    } else if (raffleIds && raffleIds.length > 0) {
+      query = query.in('donation_formId', raffleIds);
     }
 
     const { data, error } = await query;
     if (error) throw error;
 
-    // Group by donation_formId manually
     const grouped: Record<string, { quantity: number; amount: number }> = {};
     (data || []).forEach((t: any) => {
       const key = t.donation_formId;
@@ -70,11 +77,15 @@ export const raffleApi = {
     }));
   },
 
-  // Create donation form (admin)
-  createDonationForm: async (): Promise<DonationForm> => {
+  // Create donation form (admin) — org admins pass their organization_id
+  createDonationForm: async (organizationId?: string | null): Promise<DonationForm> => {
+    const insertPayload: Record<string, any> = {};
+    if (organizationId) {
+      insertPayload.organization_id = organizationId;
+    }
     const { data, error } = await supabase
       .from('donation_form')
-      .insert({})
+      .insert(insertPayload)
       .select()
       .single();
     if (error) throw error;
@@ -103,12 +114,18 @@ export const raffleApi = {
     if (error) throw error;
   },
 
-  // Get completed raffle IDs (those with winners)
-  getCompletedRaffleIds: async (): Promise<string[]> => {
-    const { data, error } = await supabase
+  // Get completed raffle IDs (those with winners) — optionally scoped to raffleIds
+  getCompletedRaffleIds: async (raffleIds?: string[]): Promise<string[]> => {
+    let query = supabase
       .from('ticket')
       .select('donation_formId')
       .eq('isWinner', true);
+
+    if (raffleIds && raffleIds.length > 0) {
+      query = query.in('donation_formId', raffleIds);
+    }
+
+    const { data, error } = await query;
     if (error) throw error;
     return [...new Set((data || []).map((d: any) => d.donation_formId).filter(Boolean))];
   },
@@ -181,22 +198,34 @@ export const ticketApi = {
     return data || [];
   },
 
-  // Get paid tickets (admin)
-  getPaidTickets: async (): Promise<Ticket[]> => {
-    const { data, error } = await supabase
+  // Get paid tickets (admin) — optionally scoped to specific raffle IDs
+  getPaidTickets: async (raffleIds?: string[]): Promise<Ticket[]> => {
+    let query = supabase
       .from('ticket')
       .select('*, donation_form(title)')
       .eq('paid', true);
+
+    if (raffleIds && raffleIds.length > 0) {
+      query = query.in('donation_formId', raffleIds);
+    }
+
+    const { data, error } = await query;
     if (error) throw error;
     return data || [];
   },
 
-  // Get winner tickets (admin)
-  getWinnerTickets: async (): Promise<Ticket[]> => {
-    const { data, error } = await supabase
+  // Get winner tickets (admin) — optionally scoped to specific raffle IDs
+  getWinnerTickets: async (raffleIds?: string[]): Promise<Ticket[]> => {
+    let query = supabase
       .from('ticket')
       .select('*, donation_form(title, id)')
       .eq('isWinner', true);
+
+    if (raffleIds && raffleIds.length > 0) {
+      query = query.in('donation_formId', raffleIds);
+    }
+
+    const { data, error } = await query;
     if (error) throw error;
     return data || [];
   },

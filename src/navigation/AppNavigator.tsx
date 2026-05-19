@@ -19,6 +19,7 @@ import GeoRestrictedScreen from '../components/GeoRestrictedScreen';
 
 // Admin Screens
 import AdminLoginScreen from '../screens/Admin/AdminLoginScreen';
+import AdminSignupScreen from '../screens/Admin/AdminSignupScreen';
 import AdminDashboardScreen from '../screens/Admin/Dashboard/AdminDashboardScreen';
 import EditRaffleScreen from '../screens/Admin/EditRaffle/EditRaffleScreen';
 import AdminTicketsScreen from '../screens/Admin/Tickets/AdminTicketsScreen';
@@ -156,6 +157,11 @@ export default function AppNavigator() {
           options={{ title: 'Location Restricted' }}
         />
         {/* Admin Screens */}
+        <Stack.Screen
+          name="AdminSignup"
+          component={AdminSignupScreen}
+          options={{ title: 'Organization Signup' }}
+        />
         <Stack.Screen
           name="AdminDashboard"
           component={AdminDashboardScreen}

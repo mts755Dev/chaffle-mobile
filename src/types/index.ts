@@ -1,3 +1,14 @@
+// ── Auth / Role types ────────────────────────────────────────────
+export type AdminRole = 'super_admin' | 'org_admin';
+
+export interface Organization {
+  id: string;
+  name: string;
+  owner_id: string;
+  created_at: string;
+  updated_at: string;
+}
+
 // Database model types matching the Prisma schema
 export interface Ticket {
   id: string;
@@ -36,6 +47,7 @@ export interface DonationForm {
   draw_date: string | null;
   min_ticket_price: number | null;
   raffleLocation: string | null;
+  organization_id: string | null;
   secure_link?: SecureLink | null;
   _count?: {
     tickets: number;
@@ -147,6 +159,7 @@ export type RootStackParamList = {
   GeoRestricted: undefined;
   // Admin
   AdminLogin: undefined;
+  AdminSignup: undefined;
   AdminDashboard: undefined;
   EditRaffle: { id: string };
   PreviewRaffle: { id: string };

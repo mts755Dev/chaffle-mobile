@@ -29,6 +29,7 @@ import {
   Ticket,
 } from '../../../types';
 import { raffleApi, ticketApi } from '../../../services/api/raffleApi';
+import { useAuthStore } from '../../../store/authStore';
 import {
   formatCurrency,
   calculatePot,
@@ -56,10 +57,13 @@ export default function PreviewRaffleScreen() {
   const route = useRoute<PreviewRaffleRouteProp>();
   const { id } = route.params;
 
+  const { isAdmin } = useAuthStore();
+
   const [donationForm, setDonationForm] = useState<DonationForm | null>(null);
   const [ticketTotal, setTicketTotal] = useState<TicketTotalByRaffle | null>(null);
   const [winnerTicket, setWinnerTicket] = useState<Ticket | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isDrawing, setIsDrawing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showQR, setShowQR] = useState(false);
 
@@ -95,6 +99,44 @@ export default function PreviewRaffleScreen() {
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const handleDrawWinner = () => {
+    Alert.alert(
+      'Draw Winner',
+      'Are you sure you want to randomly select a winner? This action cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Draw Winner',
+          style: 'destructive',
+          onPress: async () => {
+            setIsDrawing(true);
+            try {
+              const paidTickets = await ticketApi.getTicketsWhere({
+                donation_formId: id,
+                paid: true,
+              } as any);
+
+              if (paidTickets.length === 0) {
+                Alert.alert('No Tickets', 'There are no paid tickets to draw from.');
+                setIsDrawing(false);
+                return;
+              }
+
+              const randomTicket = paidTickets[Math.floor(Math.random() * paidTickets.length)];
+              await ticketApi.updateTicket(randomTicket.id, { isWinner: true });
+              setWinnerTicket({ ...randomTicket, isWinner: true });
+              Alert.alert('Winner Selected!', `Ticket #${randomTicket.id.slice(0, 8).toUpperCase()} has won!`);
+            } catch (err: any) {
+              Alert.alert('Error', err.message || 'Failed to draw winner');
+            } finally {
+              setIsDrawing(false);
+            }
+          },
+        },
+      ],
+    );
   };
 
   const handleShare = async () => {
@@ -321,6 +363,25 @@ export default function PreviewRaffleScreen() {
               labelStyle={styles.winnerButtonLabel}
             >
               Buy Tickets
+            </Button>
+          </View>
+        )}
+
+        {/* ─── Draw Winner Button (visible when expired, no winner, admin) ─── */}
+        {isAdmin && isExpired && !winnerTicket && (
+          <View style={styles.section}>
+            <Button
+              mode="contained"
+              onPress={handleDrawWinner}
+              loading={isDrawing}
+              disabled={isDrawing}
+              style={styles.drawWinnerButton}
+              contentStyle={styles.winnerButtonContent}
+              buttonColor="#D97706"
+              icon="trophy"
+              labelStyle={styles.winnerButtonLabel}
+            >
+              {isDrawing ? 'Drawing...' : 'Draw Winner'}
             </Button>
           </View>
         )}
@@ -712,6 +773,10 @@ const styles = StyleSheet.create({
     marginTop: 16,
   },
   buyButton: {
+    borderRadius: 12,
+    marginBottom: 12,
+  },
+  drawWinnerButton: {
     borderRadius: 12,
     marginBottom: 12,
   },

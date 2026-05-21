@@ -1,5 +1,5 @@
 // ── Auth / Role types ────────────────────────────────────────────
-export type AdminRole = 'super_admin' | 'org_admin';
+export type AdminRole = 'super_admin' | 'org_admin' | 'worker';
 
 export interface Organization {
   id: string;
@@ -7,6 +7,17 @@ export interface Organization {
   owner_id: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface Worker {
+  id: string;
+  email: string;
+  raffle_id: string;
+  organization_id: string;
+  created_by: string;
+  user_id: string | null;
+  expires_at: string;
+  created_at: string;
 }
 
 // Database model types matching the Prisma schema
@@ -167,6 +178,9 @@ export type RootStackParamList = {
   AdminWinners: undefined;
   InPersonPayment: { id: string };
   StripeConnectLink: { raffleId: string };
+  ManageWorkers: { raffleId: string };
+  WorkerDashboard: undefined;
+  WorkerTickets: undefined;
 };
 
 export type MainTabParamList = {

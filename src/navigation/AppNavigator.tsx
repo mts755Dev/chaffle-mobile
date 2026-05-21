@@ -26,6 +26,9 @@ import AdminTicketsScreen from '../screens/Admin/Tickets/AdminTicketsScreen';
 import AdminWinnersScreen from '../screens/Admin/Winners/AdminWinnersScreen';
 import InPersonPaymentScreen from '../screens/Admin/InPersonPayment/InPersonPaymentScreen';
 import PreviewRaffleScreen from '../screens/Admin/PreviewRaffle/PreviewRaffleScreen';
+import ManageWorkersScreen from '../screens/Admin/Workers/ManageWorkersScreen';
+import WorkerDashboardScreen from '../screens/Worker/WorkerDashboardScreen';
+import WorkerTicketsScreen from '../screens/Worker/WorkerTicketsScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
@@ -191,6 +194,21 @@ export default function AppNavigator() {
           name="InPersonPayment"
           component={InPersonPaymentScreen}
           options={{ title: 'In-Person Payment' }}
+        />
+        <Stack.Screen
+          name="ManageWorkers"
+          component={ManageWorkersScreen}
+          options={{ title: 'Manage Workers' }}
+        />
+        <Stack.Screen
+          name="WorkerDashboard"
+          component={WorkerDashboardScreen}
+          options={{ title: 'Worker Dashboard' }}
+        />
+        <Stack.Screen
+          name="WorkerTickets"
+          component={WorkerTicketsScreen}
+          options={{ title: 'Tickets' }}
         />
       </Stack.Navigator>
     </NavigationContainer>

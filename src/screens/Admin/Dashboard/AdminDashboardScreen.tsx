@@ -268,10 +268,24 @@ export default function AdminDashboardScreen() {
                     </View>
                     <View style={styles.statsActions}>
                       <IconButton
+                        icon="pencil"
+                        iconColor={COLORS.primary}
+                        size={20}
+                        onPress={() => navigation.navigate('EditRaffle', { id: form.id })}
+                        style={styles.iconAction}
+                      />
+                      <IconButton
                         icon="eye"
                         iconColor={COLORS.foreground}
                         size={20}
                         onPress={() => navigation.navigate('PreviewRaffle', { id: form.id })}
+                        style={styles.iconAction}
+                      />
+                      <IconButton
+                        icon="account-group"
+                        iconColor={COLORS.primary}
+                        size={20}
+                        onPress={() => navigation.navigate('ManageWorkers', { raffleId: form.id })}
                         style={styles.iconAction}
                       />
                       {hasStripe && !completed ? (

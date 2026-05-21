@@ -57,7 +57,8 @@ export default function PreviewRaffleScreen() {
   const route = useRoute<PreviewRaffleRouteProp>();
   const { id } = route.params;
 
-  const { isAdmin } = useAuthStore();
+  const { isAdmin, role } = useAuthStore();
+  const isWorker = role === 'worker';
 
   const [donationForm, setDonationForm] = useState<DonationForm | null>(null);
   const [ticketTotal, setTicketTotal] = useState<TicketTotalByRaffle | null>(null);
@@ -367,8 +368,8 @@ export default function PreviewRaffleScreen() {
           </View>
         )}
 
-        {/* ─── Draw Winner Button (visible when expired, no winner, admin) ─── */}
-        {isAdmin && isExpired && !winnerTicket && (
+        {/* ─── Draw Winner Button (visible when expired, no winner, admin — hidden for workers) ─── */}
+        {isAdmin && !isWorker && isExpired && !winnerTicket && (
           <View style={styles.section}>
             <Button
               mode="contained"

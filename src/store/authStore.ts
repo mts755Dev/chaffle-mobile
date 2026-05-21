@@ -1,7 +1,8 @@
 import { create } from 'zustand';
 import { supabase } from '../services/supabase/client';
 import type { User, Session } from '@supabase/supabase-js';
-import type { AdminRole, Organization } from '../types';
+import type { AdminRole } from '../types';
+import { workerApi } from '../services/api/workerApi';
 
 interface AuthState {
   user: User | null;
@@ -11,11 +12,13 @@ interface AuthState {
   role: AdminRole | null;
   organizationId: string | null;
   organizationName: string | null;
+  raffleId: string | null;
   error: string | null;
 
   initialize: () => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   signup: (email: string, password: string, organizationName: string) => Promise<void>;
+  createWorker: (email: string, password: string, raffleId: string, organizationId: string, durationHours: number) => Promise<void>;
   logout: () => Promise<void>;
   clearError: () => void;
 }
@@ -25,6 +28,7 @@ function deriveRole(user: User | null): AdminRole | null {
   const metaRole = user.user_metadata?.role;
   if (metaRole === 'admin') return 'super_admin';
   if (metaRole === 'org_admin') return 'org_admin';
+  if (metaRole === 'worker') return 'worker';
   return 'super_admin';
 }
 
@@ -38,6 +42,18 @@ function deriveOrgName(user: User | null): string | null {
   return user.user_metadata?.organization_name || null;
 }
 
+function deriveRaffleId(user: User | null): string | null {
+  if (!user) return null;
+  return user.user_metadata?.raffle_id || null;
+}
+
+function isWorkerExpired(user: User | null): boolean {
+  if (!user) return false;
+  const expiresAt = user.user_metadata?.expires_at;
+  if (!expiresAt) return false;
+  return new Date(expiresAt) < new Date();
+}
+
 export const useAuthStore = create<AuthState>((set, get) => ({
   user: null,
   session: null,
@@ -46,6 +62,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   role: null,
   organizationId: null,
   organizationName: null,
+  raffleId: null,
   error: null,
 
   initialize: async () => {
@@ -57,6 +74,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       }
       if (data?.session) {
         const user = data.session.user;
+
+        if (deriveRole(user) === 'worker' && isWorkerExpired(user)) {
+          await supabase.auth.signOut();
+          set({ isLoading: false, error: 'Your worker account has expired' });
+          return;
+        }
+
         set({
           user,
           session: data.session,
@@ -64,6 +88,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           role: deriveRole(user),
           organizationId: deriveOrgId(user),
           organizationName: deriveOrgName(user),
+          raffleId: deriveRaffleId(user),
           isLoading: false,
         });
       } else {
@@ -72,6 +97,22 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
       supabase.auth.onAuthStateChange((_event, session) => {
         const user = session?.user || null;
+
+        if (user && deriveRole(user) === 'worker' && isWorkerExpired(user)) {
+          supabase.auth.signOut();
+          set({
+            user: null,
+            session: null,
+            isAdmin: false,
+            role: null,
+            organizationId: null,
+            organizationName: null,
+            raffleId: null,
+            error: 'Your worker account has expired',
+          });
+          return;
+        }
+
         set({
           user,
           session,
@@ -79,6 +120,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           role: deriveRole(user),
           organizationId: deriveOrgId(user),
           organizationName: deriveOrgName(user),
+          raffleId: deriveRaffleId(user),
         });
       });
     } catch {
@@ -100,6 +142,38 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       }
 
       const user = data.user;
+
+      // Worker expiry check
+      if (deriveRole(user) === 'worker' && isWorkerExpired(user)) {
+        await supabase.auth.signOut();
+        set({ error: 'Your worker account has expired', isLoading: false });
+        return;
+      }
+
+      // If org_admin signed up but org record was never created (e.g. rate limit interrupted signup)
+      if (
+        user.user_metadata?.role === 'org_admin' &&
+        !user.user_metadata?.organization_id &&
+        user.user_metadata?.organization_name
+      ) {
+        const orgName = user.user_metadata.organization_name;
+        const { data: orgData } = await supabase
+          .from('organization')
+          .insert({ name: orgName, owner_id: user.id })
+          .select()
+          .single();
+
+        if (orgData) {
+          await supabase.auth.updateUser({
+            data: {
+              organization_id: orgData.id,
+              organization_name: orgName,
+            },
+          });
+          user.user_metadata.organization_id = orgData.id;
+        }
+      }
+
       set({
         user,
         session: data.session,
@@ -107,6 +181,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         role: deriveRole(user),
         organizationId: deriveOrgId(user),
         organizationName: deriveOrgName(user),
+        raffleId: deriveRaffleId(user),
         isLoading: false,
       });
     } catch (err: any) {
@@ -184,6 +259,65 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     }
   },
 
+  createWorker: async (
+    email: string,
+    password: string,
+    raffleId: string,
+    organizationId: string,
+    durationHours: number,
+  ) => {
+    set({ isLoading: true, error: null });
+    try {
+      const currentSession = get().session;
+
+      const expiresAt = new Date(Date.now() + durationHours * 60 * 60 * 1000).toISOString();
+
+      const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+        email,
+        password,
+        options: {
+          data: {
+            role: 'worker',
+            raffle_id: raffleId,
+            organization_id: organizationId,
+            expires_at: expiresAt,
+          },
+        },
+      });
+
+      if (signUpError) {
+        set({ error: signUpError.message, isLoading: false });
+        return;
+      }
+
+      if (!signUpData.user) {
+        set({ error: 'Worker signup failed — no user returned', isLoading: false });
+        return;
+      }
+
+      // Restore the org admin session (signUp auto-signs-in the new user)
+      if (currentSession) {
+        await supabase.auth.setSession({
+          access_token: currentSession.access_token,
+          refresh_token: currentSession.refresh_token,
+        });
+      }
+
+      await workerApi.createWorker({
+        email,
+        raffle_id: raffleId,
+        organization_id: organizationId,
+        created_by: currentSession?.user?.id || signUpData.user.id,
+        user_id: signUpData.user.id,
+        expires_at: expiresAt,
+      });
+
+      set({ isLoading: false });
+    } catch (err: any) {
+      set({ error: err.message || 'Failed to create worker', isLoading: false });
+    }
+  },
+
   logout: async () => {
     set({ isLoading: true });
     try {
@@ -195,6 +329,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         role: null,
         organizationId: null,
         organizationName: null,
+        raffleId: null,
         isLoading: false,
       });
     } catch {

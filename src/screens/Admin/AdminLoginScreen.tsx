@@ -30,7 +30,7 @@ type LoginFormData = z.infer<typeof loginSchema>;
 
 export default function AdminLoginScreen() {
   const navigation = useNavigation<NavigationProp>();
-  const { login, isAdmin, isLoading, error, clearError } = useAuthStore();
+  const { login, isAdmin, isLoading, error, clearError, role } = useAuthStore();
   const [showPassword, setShowPassword] = useState(false);
 
   const {
@@ -45,7 +45,11 @@ export default function AdminLoginScreen() {
 
   useEffect(() => {
     if (isAdmin) {
-      navigation.navigate('AdminDashboard');
+      if (role === 'worker') {
+        navigation.navigate('WorkerDashboard');
+      } else {
+        navigation.navigate('AdminDashboard');
+      }
     } else {
       reset();
       setShowPassword(false);

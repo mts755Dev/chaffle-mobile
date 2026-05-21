@@ -94,7 +94,7 @@ export default function AdminDashboardScreen() {
         text: 'Logout',
         onPress: async () => {
           await logout();
-          navigation.navigate('MainTabs', { screen: 'Home' });
+          navigation.navigate('MainTabs');
         },
       },
     ]);

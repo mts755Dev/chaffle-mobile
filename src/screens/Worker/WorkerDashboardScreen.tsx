@@ -201,6 +201,20 @@ export default function WorkerDashboardScreen() {
               Sell Tickets
             </Button>
 
+            {!!(raffle.stripeAccount as any)?.id && (
+              <Button
+                mode="contained"
+                onPress={() => navigation.navigate('InPersonPayment', { id: raffle.id })}
+                icon="credit-card"
+                style={styles.actionBtn}
+                contentStyle={styles.actionBtnContent}
+                labelStyle={styles.actionBtnLabel}
+                buttonColor={COLORS.primary}
+              >
+                In-Person Payment
+              </Button>
+            )}
+
             <Button
               mode="contained"
               onPress={() => navigation.navigate('WorkerTickets')}

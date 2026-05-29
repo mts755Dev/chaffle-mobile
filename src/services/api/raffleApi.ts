@@ -2,6 +2,7 @@ import apiClient from './client';
 import { supabase } from '../supabase/client';
 import {
   DonationForm,
+  StripeAccount,
   Ticket,
   TicketTotalByRaffle,
   CreateTicketPayload,
@@ -17,6 +18,28 @@ import {
 // For direct Supabase queries (read operations that don't need server actions)
 // We can use Supabase client directly for reads since the data is in Supabase/Postgres
 
+/**
+ * Returns the effective Stripe account for a form.
+ * Prefers the raffle's own stripeAccount; falls back to the org-level one.
+ */
+export function getEffectiveStripeAccount(
+  form: DonationForm,
+  orgStripeJson: StripeAccount | null | undefined,
+): StripeAccount | null {
+  if (form.stripeAccount?.id) return form.stripeAccount;
+  if (orgStripeJson?.id) return orgStripeJson;
+  return null;
+}
+
+async function fetchOrgStripeJson(organizationId: string): Promise<StripeAccount | null> {
+  const { data } = await supabase
+    .from('organization')
+    .select('stripe_account_json')
+    .eq('id', organizationId)
+    .single();
+  return (data?.stripe_account_json as StripeAccount) ?? null;
+}
+
 export const raffleApi = {
   // Get all donation forms (admin) — optionally filtered by organization
   getDonationForms: async (organizationId?: string | null): Promise<DonationForm[]> => {
@@ -30,9 +53,27 @@ export const raffleApi = {
 
     const { data, error } = await query;
     if (error) throw error;
-    return (data || []).map((d: any) => ({
+
+    const forms: DonationForm[] = (data || []).map((d: any) => ({
       ...d,
       _count: { tickets: d.ticket?.[0]?.count || 0 },
+    }));
+
+    // Org-level stripe inheritance: fetch once per unique org
+    const orgIds = [...new Set(forms.map((f) => f.organization_id).filter(Boolean))] as string[];
+    const orgStripeMap: Record<string, StripeAccount | null> = {};
+    await Promise.all(
+      orgIds.map(async (oid) => {
+        orgStripeMap[oid] = await fetchOrgStripeJson(oid);
+      }),
+    );
+
+    return forms.map((f) => ({
+      ...f,
+      stripeAccount: getEffectiveStripeAccount(
+        f,
+        f.organization_id ? orgStripeMap[f.organization_id] : null,
+      ),
     }));
   },
 
@@ -44,7 +85,13 @@ export const raffleApi = {
       .eq('id', id)
       .single();
     if (error) return null;
-    return data;
+
+    const form = data as DonationForm;
+    if (form.organization_id && !form.stripeAccount?.id) {
+      const orgStripe = await fetchOrgStripeJson(form.organization_id);
+      form.stripeAccount = getEffectiveStripeAccount(form, orgStripe);
+    }
+    return form;
   },
 
   // Get ticket totals by raffle (sum of paid tickets)

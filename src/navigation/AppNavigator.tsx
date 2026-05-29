@@ -105,7 +105,7 @@ function MainTabs() {
         name="AdminLogin"
         component={AdminLoginScreen}
         options={{
-          title: 'Admin',
+          title: 'Sign In',
           tabBarIcon: ({ color, size }) => (
             <Icon source="shield-account" size={size} color={color} />
           ),

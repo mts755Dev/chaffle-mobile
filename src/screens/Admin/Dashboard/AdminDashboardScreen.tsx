@@ -19,6 +19,7 @@ import {
 } from 'react-native-paper';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import * as Linking from 'expo-linking';
 import { COLORS } from '../../../constants';
 import { RootStackParamList, TicketTotalByRaffle } from '../../../types';
 import { useRaffleStore } from '../../../store/raffleStore';
@@ -30,7 +31,15 @@ type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 export default function AdminDashboardScreen() {
   const navigation = useNavigation<NavigationProp>();
-  const { logout, role, organizationId, organizationName } = useAuthStore();
+  const {
+    logout,
+    role,
+    organizationId,
+    organizationName,
+    orgStripeConnected,
+    connectStripe,
+    refreshStripeStatus,
+  } = useAuthStore();
   const {
     forms,
     ticketTotals,
@@ -48,6 +57,8 @@ export default function AdminDashboardScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [filterText, setFilterText] = useState('');
+  const [isConnectingStripe, setIsConnectingStripe] = useState(false);
+  const [isRefreshingStripe, setIsRefreshingStripe] = useState(false);
 
   // Filter forms by title
   const filteredForms = filterText.trim()
@@ -107,6 +118,35 @@ export default function AdminDashboardScreen() {
     ]);
   };
 
+  const handleConnectStripe = async () => {
+    setIsConnectingStripe(true);
+    try {
+      const onboardingUrl = await connectStripe();
+      await Linking.openURL(onboardingUrl);
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Failed to start Stripe onboarding');
+    } finally {
+      setIsConnectingStripe(false);
+    }
+  };
+
+  const handleRefreshStripe = async () => {
+    setIsRefreshingStripe(true);
+    try {
+      const result = await refreshStripeStatus();
+      Alert.alert(
+        'Stripe Status',
+        result.charges_enabled
+          ? 'Stripe is connected and ready to accept payments!'
+          : 'Stripe onboarding is not yet complete. Please finish onboarding in your browser.',
+      );
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Failed to refresh Stripe status');
+    } finally {
+      setIsRefreshingStripe(false);
+    }
+  };
+
   const getTicketTotal = (raffleId: string): TicketTotalByRaffle | undefined => {
     return ticketTotals.find((t) => t.donation_formId === raffleId);
   };
@@ -152,6 +192,42 @@ export default function AdminDashboardScreen() {
           Logout
         </Button>
       </View>
+
+      {isOrgAdmin && (
+        <View style={styles.stripeBar}>
+          {orgStripeConnected ? (
+            <Chip icon="check-circle" style={styles.stripeConnectedChip} textStyle={styles.stripeConnectedText}>
+              Stripe Connected
+            </Chip>
+          ) : (
+            <>
+              <Button
+                mode="contained"
+                onPress={handleConnectStripe}
+                loading={isConnectingStripe}
+                disabled={isConnectingStripe}
+                icon="link-variant"
+                compact
+                style={styles.stripeConnectButton}
+                buttonColor={COLORS.primary}
+              >
+                Connect Stripe
+              </Button>
+              <Button
+                mode="outlined"
+                onPress={handleRefreshStripe}
+                loading={isRefreshingStripe}
+                disabled={isRefreshingStripe}
+                icon="refresh"
+                compact
+                style={styles.stripeRefreshButton}
+              >
+                Refresh
+              </Button>
+            </>
+          )}
+        </View>
+      )}
 
       <ScrollView
         style={styles.flex}
@@ -347,6 +423,31 @@ const styles = StyleSheet.create({
   topButton: {
     flex: 1,
     borderColor: COLORS.border,
+  },
+  stripeBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    gap: 8,
+    backgroundColor: COLORS.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  stripeConnectedChip: {
+    backgroundColor: '#e8f5e9',
+  },
+  stripeConnectedText: {
+    color: COLORS.success,
+    fontWeight: '600',
+  },
+  stripeConnectButton: {
+    flex: 1,
+    borderRadius: 8,
+  },
+  stripeRefreshButton: {
+    borderColor: COLORS.border,
+    borderRadius: 8,
   },
   filterInput: {
     backgroundColor: COLORS.white,

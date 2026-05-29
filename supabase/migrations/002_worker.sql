@@ -68,7 +68,7 @@ CREATE POLICY "Workers can read assigned raffle"
 CREATE POLICY "Workers can read tickets for assigned raffle"
   ON ticket FOR SELECT
   USING (
-    donation_formId IN (
+    "donation_formId" IN (
       SELECT raffle_id FROM worker
       WHERE user_id = auth.uid()
         AND expires_at > now()
@@ -79,7 +79,7 @@ CREATE POLICY "Workers can read tickets for assigned raffle"
 CREATE POLICY "Workers can insert tickets for assigned raffle"
   ON ticket FOR INSERT
   WITH CHECK (
-    donation_formId IN (
+    "donation_formId" IN (
       SELECT raffle_id FROM worker
       WHERE user_id = auth.uid()
         AND expires_at > now()

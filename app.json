@@ -17,7 +17,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.chaffleorg.chaffle",
-      "buildNumber": "18",
+      "buildNumber": "19",
       "entitlements": {
         "com.apple.developer.proximity-reader.payment.acceptance": true
       },
@@ -60,7 +60,8 @@
       [
         "@stripe/stripe-terminal-react-native",
         {
-          "bluetoothBackgroundMode": false
+          "bluetoothBackgroundMode": false,
+          "enableTapToPay": true
         }
       ],
       [

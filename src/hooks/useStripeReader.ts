@@ -15,16 +15,23 @@ import {
 } from '@stripe/stripe-terminal-react-native';
 import { stripeApi } from '../services/api/stripeApi';
 import { terminalLog } from '../services/stripeTerminal';
+import {
+  notifyTapToPayTermsAcceptedFromApple,
+  setTapToPayTermsAcceptedFromAppleSynced,
+} from '../services/tapToPayTermsState';
 import { STRIPE_TERMINAL_SIMULATED } from '../constants';
+import { classifyTerminalPaymentError } from '../utils/terminalPaymentOutcome';
 import type {
   ReaderConnectionStatus,
   TerminalPaymentStatus,
   TerminalPaymentResult,
+  TerminalPaymentOutcome,
 } from '../types';
 
 const MAX_RECONNECT_ATTEMPTS = 3;
 const RECONNECT_DELAY_MS = 2000;
-const CONNECT_TIMEOUT_MS = 30_000;
+/** First-time Tap to Pay can install reader software for 1–2+ minutes. */
+const CONNECT_TIMEOUT_MS = 180_000;
 
 /**
  * Wrap a promise with a timeout. Rejects with a message if not settled in time.
@@ -52,6 +59,42 @@ function isBenignDiscoveryError(error: any): boolean {
   );
 }
 
+function isOsVersionNotSupportedError(error: any): boolean {
+  const code = (error?.code ?? '').toString();
+  const nativeCode = (error?.nativeErrorCode ?? '').toString();
+  const msg = (error?.message ?? '').toLowerCase();
+  return (
+    code.includes('OS_VERSION') ||
+    nativeCode.includes('OS_VERSION') ||
+    msg.includes('osversionnotsupported') ||
+    msg.includes('os version not supported')
+  );
+}
+
+function formatTerminalErrorMessage(error: any, fallback: string): string {
+  if (isOsVersionNotSupportedError(error)) {
+    return 'Tap to Pay requires a newer version of iOS. Please update your iPhone to the latest iOS and try again.';
+  }
+  return error?.message || fallback;
+}
+
+function isAlreadyConnectedError(error: any): boolean {
+  const code = error?.code ?? '';
+  const msg = (error?.message ?? '').toLowerCase();
+  return code === 'ALREADY_CONNECTED_TO_READER' || msg.includes('already connected');
+}
+
+function isConnectedReaderPayload(
+  value: Reader.Type | { error?: unknown } | null | undefined
+): value is Reader.Type {
+  return (
+    value != null &&
+    typeof value === 'object' &&
+    'deviceType' in value &&
+    !('error' in value && (value as { error?: unknown }).error)
+  );
+}
+
 interface UseStripeReaderOptions {
   stripeAccount?: string;
 }
@@ -63,6 +106,10 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
   // onUpdateDiscoveredReaders callback can trigger connection directly.
   const autoConnectingRef = useRef(false);
   const connectToReaderRef = useRef<(reader: Reader.Type) => Promise<void>>(undefined);
+  const readerUpdateInProgressRef = useRef(false);
+  const pendingReaderForConnectRef = useRef<Reader.Type | null>(null);
+  const connectInProgressRef = useRef(false);
+  const syncConnectionFromSdkRef = useRef<() => Promise<boolean>>(async () => false);
 
   const {
     initialize: sdkInitialize,
@@ -71,10 +118,13 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
     cancelDiscovering,
     connectReader: sdkConnectReader,
     disconnectReader: sdkDisconnectReader,
+    getConnectedReader: sdkGetConnectedReader,
+    getConnectionStatus: sdkGetConnectionStatus,
     retrievePaymentIntent,
     collectPaymentMethod,
     confirmPaymentIntent,
     cancelCollectPaymentMethod,
+    clearCachedCredentials: sdkClearCachedCredentials,
   } = useStripeTerminal({
     onUpdateDiscoveredReaders: (readers) => {
       terminalLog.discovery(
@@ -94,25 +144,47 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
       if (error) {
         if (isBenignDiscoveryError(error)) {
           terminalLog.discovery('Discovery ended (connecting or already connected)');
+          void syncConnectionFromSdkRef.current();
           return;
         }
         terminalLog.error('Discovery finished with error', error);
       } else {
         terminalLog.discovery('Discovery finished');
+        void syncConnectionFromSdkRef.current();
       }
     },
     onDidChangeConnectionStatus: (status) => {
       terminalLog.connection(`Connection status changed: ${status}`);
+      if (status === 'connected') {
+        void syncConnectionFromSdkRef.current();
+      } else if (status === 'notConnected') {
+        if (!readerUpdateInProgressRef.current && !connectInProgressRef.current) {
+          setConnectionStatus('not_connected');
+          setConnectedReader(null);
+        }
+      } else if (
+        status === 'connecting' ||
+        status === 'discovering' ||
+        status === 'reconnecting'
+      ) {
+        setConnectionStatus('connecting');
+      }
     },
     onDidDisconnect: (reason) => {
       setConnectedReader(null);
-      setConnectionStatus('not_connected');
 
       if (reason === 'disconnectRequested') {
+        setConnectionStatus('not_connected');
         terminalLog.connection('Tap to Pay disconnected (requested)');
         return;
       }
 
+      if (readerUpdateInProgressRef.current || connectInProgressRef.current) {
+        terminalLog.connection('Tap to Pay disconnect during setup (ignored for reconnect)');
+        return;
+      }
+
+      setConnectionStatus('not_connected');
       terminalLog.error('Tap to Pay disconnected unexpectedly', reason);
       handleAutoReconnect();
     },
@@ -128,14 +200,51 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
     },
     onDidSucceedReaderReconnect: (reader) => {
       terminalLog.connection('Tap to Pay reconnected');
-      setConnectedReader(reader);
-      setConnectionStatus('connected');
-      reconnectAttempts.current = 0;
+      applyConnectedReader(reader);
     },
     onDidFailReaderReconnect: () => {
       terminalLog.error('Failed to reconnect Tap to Pay');
       setConnectedReader(null);
       setConnectionStatus('not_connected');
+    },
+    onDidAcceptTermsOfService: () => {
+      terminalLog.connection('Tap to Pay Terms & Conditions accepted (Apple)');
+      notifyTapToPayTermsAcceptedFromApple();
+    },
+    onDidStartInstallingUpdate: (update) => {
+      readerUpdateInProgressRef.current = true;
+      setReaderUpdateProgress(0);
+      setConnectionStatus('connecting');
+      setPaymentError(null);
+      autoConnectingRef.current = false;
+      terminalLog.connection(
+        `Installing Tap to Pay software (${update.estimatedUpdateTime ?? 'in progress'})…`
+      );
+    },
+    onDidReportReaderSoftwareUpdateProgress: (progress) => {
+      const value = parseFloat(progress);
+      if (!Number.isNaN(value)) {
+        setReaderUpdateProgress(value);
+      }
+    },
+    onDidFinishInstallingUpdate: (result) => {
+      readerUpdateInProgressRef.current = false;
+      setReaderUpdateProgress(null);
+
+      if (result.error) {
+        terminalLog.error('Tap to Pay software update failed', result.error);
+        setConnectionStatus('not_connected');
+        setPaymentError(result.error.message || 'Tap to Pay software update failed');
+        return;
+      }
+
+      terminalLog.connection('Tap to Pay software update finished — connecting…');
+
+      const reader =
+        pendingReaderForConnectRef.current ?? lastConnectedReader.current;
+      if (reader && connectToReaderRef.current) {
+        void connectToReaderRef.current(reader);
+      }
     },
   });
 
@@ -145,8 +254,10 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
   const [connectedReader, setConnectedReader] = useState<Reader.Type | null>(null);
   const [connectionStatus, setConnectionStatus] = useState<ReaderConnectionStatus>('not_connected');
   const [paymentStatus, setPaymentStatus] = useState<TerminalPaymentStatus>('idle');
+  const [paymentOutcome, setPaymentOutcome] = useState<TerminalPaymentOutcome | null>(null);
   const [paymentResult, setPaymentResult] = useState<TerminalPaymentResult | null>(null);
   const [paymentError, setPaymentError] = useState<string | null>(null);
+  const [readerUpdateProgress, setReaderUpdateProgress] = useState<number | null>(null);
   const [sdkReady, setSdkReady] = useState(false);
 
   const reconnectAttempts = useRef(0);
@@ -154,15 +265,142 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
   const currentPaymentIntentId = useRef<string | null>(null);
   const initPromiseRef = useRef<Promise<boolean> | null>(null);
   const isDiscoveringRef = useRef(false);
+  const connectionStatusRef = useRef<ReaderConnectionStatus>(connectionStatus);
+  /** Stripe Connect account the reader was connected under (undefined = platform token). */
+  const connectedStripeAccountRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     isDiscoveringRef.current = isDiscovering;
   }, [isDiscovering]);
 
+  useEffect(() => {
+    connectionStatusRef.current = connectionStatus;
+  }, [connectionStatus]);
+
+  const resetTerminalConnectionState = useCallback(() => {
+    setConnectedReader(null);
+    lastConnectedReader.current = null;
+    pendingReaderForConnectRef.current = null;
+    setConnectionStatus('not_connected');
+    setDiscoveredReaders([]);
+    connectedStripeAccountRef.current = undefined;
+    autoConnectingRef.current = false;
+    connectInProgressRef.current = false;
+  }, []);
+
+  /**
+   * PaymentIntents are created on the connected account. The Terminal SDK must use
+   * the same account (connection token scope). Reconnect when scope changes.
+   */
+  const reconcileStripeAccountScope = useCallback(async (): Promise<void> => {
+    const targetAccount = stripeAccount;
+    if (connectedStripeAccountRef.current === targetAccount) {
+      return;
+    }
+
+    if (
+      connectionStatusRef.current === 'connected' ||
+      connectionStatusRef.current === 'connecting' ||
+      connectInProgressRef.current
+    ) {
+      terminalLog.connection(
+        `Stripe account scope changed (${connectedStripeAccountRef.current ?? 'platform'} → ${targetAccount ?? 'platform'}), resetting Terminal session…`,
+      );
+      try {
+        await cancelDiscovering();
+      } catch {
+        // ignore
+      }
+      try {
+        await sdkDisconnectReader();
+      } catch {
+        // ignore
+      }
+      try {
+        await sdkClearCachedCredentials();
+      } catch {
+        // ignore
+      }
+      resetTerminalConnectionState();
+    }
+  }, [
+    stripeAccount,
+    cancelDiscovering,
+    sdkDisconnectReader,
+    sdkClearCachedCredentials,
+    resetTerminalConnectionState,
+  ]);
+
+  useEffect(() => {
+    void reconcileStripeAccountScope();
+  }, [reconcileStripeAccountScope]);
+
+  const applyConnectedReader = useCallback((reader: Reader.Type) => {
+    connectedStripeAccountRef.current = stripeAccount;
+    setConnectedReader(reader);
+    lastConnectedReader.current = reader;
+    pendingReaderForConnectRef.current = null;
+    setConnectionStatus('connected');
+    setReaderUpdateProgress(null);
+    readerUpdateInProgressRef.current = false;
+    autoConnectingRef.current = false;
+    connectInProgressRef.current = false;
+    setPaymentError(null);
+    reconnectAttempts.current = 0;
+    setTapToPayTermsAcceptedFromAppleSynced();
+  }, [stripeAccount]);
+
+  const syncConnectionFromSdk = useCallback(async (): Promise<boolean> => {
+    if (!sdkReady && !isInitialized) {
+      return false;
+    }
+
+    try {
+      const readerResult = await sdkGetConnectedReader();
+      if (isConnectedReaderPayload(readerResult)) {
+        applyConnectedReader(readerResult);
+        terminalLog.connection('Tap to Pay already connected (synced from SDK)');
+        return true;
+      }
+
+      const statusResult = await sdkGetConnectionStatus();
+      const sdkStatus =
+        typeof statusResult === 'string'
+          ? statusResult
+          : (statusResult as { error?: unknown })?.error
+            ? null
+            : (statusResult as string);
+
+      if (sdkStatus === 'connected') {
+        const retryReader = await sdkGetConnectedReader();
+        if (isConnectedReaderPayload(retryReader)) {
+          applyConnectedReader(retryReader);
+          terminalLog.connection('Tap to Pay connected (synced status from SDK)');
+          return true;
+        }
+      }
+
+      if (sdkStatus === 'notConnected' && !readerUpdateInProgressRef.current) {
+        setConnectionStatus((prev) => (prev === 'connecting' ? 'not_connected' : prev));
+        autoConnectingRef.current = false;
+      }
+
+      return false;
+    } catch (err: any) {
+      terminalLog.error('Failed to sync Tap to Pay connection from SDK', err);
+      return false;
+    }
+  }, [sdkReady, isInitialized, sdkGetConnectedReader, sdkGetConnectionStatus, applyConnectedReader]);
+
+  useEffect(() => {
+    syncConnectionFromSdkRef.current = syncConnectionFromSdk;
+  }, [syncConnectionFromSdk]);
+
   // ── SDK Initialization ────────────────────────────────────────────
   const ensureInitialized = useCallback(async (): Promise<boolean> => {
     if (sdkReady || isInitialized) {
       if (!sdkReady) setSdkReady(true);
+      await syncConnectionFromSdk();
       return true;
     }
 
@@ -173,14 +411,19 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
     const promise = (async () => {
       try {
         terminalLog.connection('Initializing Stripe Terminal SDK…');
-        const { error } = await sdkInitialize();
-        if (error) {
-          terminalLog.error('SDK initialization failed', error);
-          setPaymentError(`SDK init failed: ${error.message}`);
+        const initResult = await sdkInitialize();
+        if (initResult.error) {
+          terminalLog.error('SDK initialization failed', initResult.error);
+          setPaymentError(`SDK init failed: ${initResult.error.message}`);
           return false;
         }
         terminalLog.connection('SDK initialized successfully');
         setSdkReady(true);
+        if (initResult.reader) {
+          applyConnectedReader(initResult.reader);
+        } else {
+          await syncConnectionFromSdk();
+        }
         return true;
       } catch (err: any) {
         terminalLog.error('SDK initialization error', err);
@@ -193,7 +436,13 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
 
     initPromiseRef.current = promise;
     return promise;
-  }, [sdkReady, isInitialized, sdkInitialize]);
+  }, [
+    sdkReady,
+    isInitialized,
+    sdkInitialize,
+    syncConnectionFromSdk,
+    applyConnectedReader,
+  ]);
 
   useEffect(() => {
     ensureInitialized();
@@ -223,11 +472,11 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
 
       if (error && !isBenignDiscoveryError(error)) {
         terminalLog.error('Discovery failed', error);
-        throw new Error(error.message || 'Failed to discover Tap to Pay reader');
+        throw new Error(formatTerminalErrorMessage(error, 'Failed to discover Tap to Pay reader'));
       }
     } catch (err: any) {
       if (err.message?.toLowerCase().includes('canceled')) return;
-      setPaymentError(err.message || 'Failed to set up Tap to Pay');
+      setPaymentError(formatTerminalErrorMessage(err, 'Failed to set up Tap to Pay'));
       terminalLog.error('Discovery error', err);
     } finally {
       setIsDiscovering(false);
@@ -248,6 +497,15 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
 
   const connectToReader = useCallback(
     async (reader: Reader.Type) => {
+      if (connectInProgressRef.current) {
+        terminalLog.connection('Connect already in progress — skipping duplicate');
+        return;
+      }
+
+      connectInProgressRef.current = true;
+      pendingReaderForConnectRef.current = reader;
+      lastConnectedReader.current = reader;
+
       try {
         setConnectionStatus('connecting');
         setPaymentError(null);
@@ -293,6 +551,8 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
             reader,
             locationId: locationId || 'tml_placeholder',
             autoReconnectOnUnexpectedDisconnect: true,
+            tosAcceptancePermitted: true,
+            ...(stripeAccount ? { onBehalfOf: stripeAccount } : {}),
           }),
           CONNECT_TIMEOUT_MS,
           'connectReader',
@@ -301,23 +561,28 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
         if (error) {
           terminalLog.error('Tap to Pay connection failed', error);
           setConnectionStatus('not_connected');
-          throw new Error(error.message || 'Failed to connect Tap to Pay');
+          throw new Error(formatTerminalErrorMessage(error, 'Failed to connect Tap to Pay'));
         }
 
         if (connected) {
-          terminalLog.connection('Tap to Pay connected successfully');
-          setConnectedReader(connected);
-          lastConnectedReader.current = connected;
-          setConnectionStatus('connected');
-          reconnectAttempts.current = 0;
+          terminalLog.connection(
+            `Tap to Pay connected successfully${stripeAccount ? ` (account: ${stripeAccount})` : ' (platform)'}`,
+          );
+          applyConnectedReader(connected);
         }
       } catch (err: any) {
+        if (readerUpdateInProgressRef.current) {
+          terminalLog.connection('Connect waiting on reader software update…');
+          return;
+        }
         setConnectionStatus('not_connected');
-        setPaymentError(err.message || 'Tap to Pay connection failed');
+        setPaymentError(formatTerminalErrorMessage(err, 'Tap to Pay connection failed'));
         terminalLog.error('Connect error', err);
+      } finally {
+        connectInProgressRef.current = false;
       }
     },
-    [sdkConnectReader, cancelDiscovering, stripeAccount]
+    [sdkConnectReader, cancelDiscovering, stripeAccount, applyConnectedReader]
   );
 
   // Keep the ref in sync so the SDK callback can call connectToReader
@@ -331,14 +596,26 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
    * directly, avoiding the race condition with useEffect.
    */
   const autoConnect = useCallback(async () => {
+    await reconcileStripeAccountScope();
+
     if (connectedReader || connectionStatus === 'connected') {
       terminalLog.connection('Already connected — skipping auto-connect');
+      return;
+    }
+
+    if (readerUpdateInProgressRef.current || connectInProgressRef.current) {
+      terminalLog.connection('Tap to Pay setup in progress — skipping auto-connect');
       return;
     }
 
     const ready = await ensureInitialized();
     if (!ready) {
       setPaymentError('Failed to initialize Terminal SDK. Please restart the app.');
+      return;
+    }
+
+    if (await syncConnectionFromSdk()) {
+      terminalLog.connection('Tap to Pay already connected — skipping discovery');
       return;
     }
 
@@ -356,40 +633,62 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
         simulated: STRIPE_TERMINAL_SIMULATED,
       });
 
+      if (error && isAlreadyConnectedError(error)) {
+        await syncConnectionFromSdk();
+        return;
+      }
+
       if (error && !isBenignDiscoveryError(error)) {
-        throw new Error(error.message || 'Failed to discover Tap to Pay reader');
+        throw new Error(formatTerminalErrorMessage(error, 'Failed to discover Tap to Pay reader'));
       }
     } catch (err: any) {
       if (err.message?.toLowerCase().includes('canceled') ||
           err.message?.toLowerCase().includes('already connected')) {
+        await syncConnectionFromSdk();
         return;
       }
       autoConnectingRef.current = false;
-      setPaymentError(err.message || 'Failed to set up Tap to Pay');
+      setPaymentError(formatTerminalErrorMessage(err, 'Failed to set up Tap to Pay'));
       setConnectionStatus('not_connected');
       terminalLog.error('Auto-connect discovery error', err);
     } finally {
       setIsDiscovering(false);
+      await syncConnectionFromSdk();
     }
-  }, [connectedReader, connectionStatus, ensureInitialized, sdkDiscoverReaders]);
+  }, [
+    connectedReader,
+    connectionStatus,
+    ensureInitialized,
+    sdkDiscoverReaders,
+    syncConnectionFromSdk,
+    reconcileStripeAccountScope,
+  ]);
 
   const disconnectReader = useCallback(async () => {
     try {
       terminalLog.connection('Disconnecting Tap to Pay…');
       await sdkDisconnectReader();
-      setConnectedReader(null);
-      lastConnectedReader.current = null;
-      setConnectionStatus('not_connected');
-      setDiscoveredReaders([]);
+      try {
+        await sdkClearCachedCredentials();
+      } catch {
+        // ignore
+      }
+      resetTerminalConnectionState();
       terminalLog.connection('Tap to Pay disconnected');
     } catch (err: any) {
       terminalLog.error('Disconnect error', err);
+      resetTerminalConnectionState();
     }
-  }, [sdkDisconnectReader]);
+  }, [sdkDisconnectReader, sdkClearCachedCredentials, resetTerminalConnectionState]);
 
   // ── Auto Reconnect ─────────────────────────────────────────────────
 
   const handleAutoReconnect = useCallback(async () => {
+    if (readerUpdateInProgressRef.current || connectInProgressRef.current) {
+      terminalLog.connection('Skipping auto-reconnect during reader software update');
+      return;
+    }
+
     const reader = lastConnectedReader.current;
     if (!reader || reconnectAttempts.current >= MAX_RECONNECT_ATTEMPTS) {
       if (reconnectAttempts.current >= MAX_RECONNECT_ATTEMPTS) {
@@ -413,6 +712,21 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
     }
   }, [connectToReader]);
 
+  const waitForReaderReady = useCallback(
+    async (timeoutMs: number = CONNECT_TIMEOUT_MS): Promise<boolean> => {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        if (connectionStatusRef.current === 'connected') {
+          return true;
+        }
+        await syncConnectionFromSdk();
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      }
+      return false;
+    },
+    [syncConnectionFromSdk],
+  );
+
   // ── Payment Flow ───────────────────────────────────────────────────
 
   const collectPayment = useCallback(
@@ -421,15 +735,32 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
       metadata?: Record<string, string>,
       isApplicationAmount?: boolean,
     ): Promise<TerminalPaymentResult> => {
-      if (connectionStatus !== 'connected') {
+      if (!stripeAccount) {
+        throw new Error(
+          'This raffle does not have Stripe connected. Link Stripe on the raffle before taking in-person payments.',
+        );
+      }
+
+      await reconcileStripeAccountScope();
+
+      if (connectionStatusRef.current !== 'connected') {
         throw new Error('Tap to Pay is not ready. Please wait for connection.');
+      }
+
+      if (connectedStripeAccountRef.current !== stripeAccount) {
+        throw new Error(
+          'Tap to Pay session does not match this raffle\'s Stripe account. Pull to reconnect or open Tap to Pay settings, then try again.',
+        );
       }
 
       try {
         setPaymentStatus('creating_intent');
         setPaymentError(null);
         setPaymentResult(null);
-        terminalLog.payment(`Creating PaymentIntent for $${amountInDollars}…`);
+        setPaymentOutcome(null);
+        terminalLog.payment(
+          `Creating PaymentIntent for $${amountInDollars} on account ${stripeAccount}…`,
+        );
 
         const intentData = await stripeApi.createTerminalPaymentIntent({
           amount: amountInDollars,
@@ -480,17 +811,61 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
         };
 
         setPaymentResult(result);
+        setPaymentOutcome('approved');
         setPaymentStatus('success');
         currentPaymentIntentId.current = null;
         return result;
       } catch (err: any) {
         terminalLog.error('Payment failed', err);
-        setPaymentError(err.message || 'Payment failed');
+        const { outcome, message } = classifyTerminalPaymentError(err);
+        setPaymentOutcome(outcome);
+        setPaymentError(message);
         setPaymentStatus('error');
         throw err;
       }
     },
-    [connectionStatus, stripeAccount, retrievePaymentIntent, collectPaymentMethod, confirmPaymentIntent]
+    [
+      stripeAccount,
+      reconcileStripeAccountScope,
+      retrievePaymentIntent,
+      collectPaymentMethod,
+      confirmPaymentIntent,
+    ]
+  );
+
+  /** Ensures reader is ready (5.7), then collects payment (5.6 warm-up assumed at app launch). */
+  const collectPaymentWithReaderReady = useCallback(
+    async (
+      amountInDollars: number,
+      metadata?: Record<string, string>,
+      isApplicationAmount?: boolean,
+    ): Promise<TerminalPaymentResult> => {
+      await reconcileStripeAccountScope();
+
+      if (connectionStatusRef.current !== 'connected') {
+        setPaymentStatus('initializing');
+        setPaymentError(null);
+        setPaymentOutcome(null);
+
+        if (connectionStatusRef.current === 'not_connected') {
+          await autoConnect();
+        }
+
+        const ready = await waitForReaderReady();
+        if (!ready) {
+          const { outcome, message } = classifyTerminalPaymentError(
+            new Error('Tap to Pay timed out while initializing'),
+          );
+          setPaymentOutcome(outcome);
+          setPaymentError(message);
+          setPaymentStatus('error');
+          throw new Error(message);
+        }
+      }
+
+      return collectPayment(amountInDollars, metadata, isApplicationAmount);
+    },
+    [autoConnect, waitForReaderReady, collectPayment, reconcileStripeAccountScope],
   );
 
   const cancelPayment = useCallback(async () => {
@@ -518,6 +893,7 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
       setPaymentStatus('idle');
       setPaymentError(null);
       setPaymentResult(null);
+      setPaymentOutcome(null);
       terminalLog.payment('Payment cancelled');
     } catch (err: any) {
       terminalLog.error('Cancel payment error', err);
@@ -529,6 +905,7 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
     setPaymentStatus('idle');
     setPaymentError(null);
     setPaymentResult(null);
+    setPaymentOutcome(null);
     currentPaymentIntentId.current = null;
   }, []);
 
@@ -544,9 +921,12 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
     autoConnect,
     disconnectReader,
     paymentStatus,
+    paymentOutcome,
     paymentResult,
     paymentError,
+    readerUpdateProgress,
     collectPayment,
+    collectPaymentWithReaderReady,
     cancelPayment,
     resetPayment,
   };

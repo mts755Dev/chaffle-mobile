@@ -7,6 +7,7 @@ import { StyleSheet, View, Text, ScrollView } from 'react-native';
 import { StripeProvider } from '@stripe/stripe-react-native';
 import * as ExpoSplashScreen from 'expo-splash-screen';
 import AppNavigator from './src/navigation/AppNavigator';
+import StripeTerminalRoot from './src/components/StripeTerminalRoot';
 import SplashScreen from './src/components/SplashScreen';
 import { theme } from './src/constants/theme';
 import { STRIPE_PUBLISHABLE_KEY } from './src/constants';
@@ -107,7 +108,9 @@ function AppContent() {
   return (
     <View style={styles.container}>
       <StatusBar style={splashDone ? 'dark' : 'light'} />
-      <AppNavigator />
+      <StripeTerminalRoot>
+        <AppNavigator />
+      </StripeTerminalRoot>
       {!splashDone && <SplashScreen onFinish={() => setSplashDone(true)} />}
     </View>
   );

@@ -6,6 +6,7 @@ import {
   RefreshControl,
   TouchableOpacity,
   Alert,
+  Platform,
 } from 'react-native';
 import {
   Text,
@@ -25,12 +26,24 @@ import { useRaffleStore } from '../../../store/raffleStore';
 import { useAuthStore } from '../../../store/authStore';
 import { formatCurrency } from '../../../utils';
 import LoadingScreen from '../../../components/LoadingScreen';
+import TapToPayIntroModal from '../../../components/TapToPayIntroModal';
+import TapToPayEnablePromptModal from '../../../components/TapToPayEnablePromptModal';
+import {
+  hasSeenTapToPayIntro,
+  markTapToPayIntroSeen,
+  hasSeenTapToPayEnablePrompt,
+  markTapToPayEnablePromptSeen,
+} from '../../../services/tapToPayPrefs';
+import {
+  canAcceptTapToPayTerms,
+  showTapToPayAdminRequiredAlert,
+} from '../../../utils/tapToPayAccess';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 export default function AdminDashboardScreen() {
   const navigation = useNavigation<NavigationProp>();
-  const { logout } = useAuthStore();
+  const { logout, isAdmin, canManageTapToPay } = useAuthStore();
   const {
     forms,
     ticketTotals,
@@ -46,6 +59,11 @@ export default function AdminDashboardScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [filterText, setFilterText] = useState('');
+  const [showTapToPayIntro, setShowTapToPayIntro] = useState(false);
+  const [showTapToPayEnable, setShowTapToPayEnable] = useState(false);
+
+  const showTapToPayFeatures =
+    Platform.OS === 'ios' && canAcceptTapToPayTerms(isAdmin, canManageTapToPay);
 
   // Filter forms by title
   const filteredForms = filterText.trim()
@@ -60,6 +78,60 @@ export default function AdminDashboardScreen() {
       loadData();
     }, []),
   );
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!showTapToPayFeatures) return;
+
+      let cancelled = false;
+
+      (async () => {
+        const introSeen = await hasSeenTapToPayIntro();
+        if (cancelled) return;
+        if (!introSeen) {
+          setShowTapToPayIntro(true);
+          return;
+        }
+        const enableSeen = await hasSeenTapToPayEnablePrompt();
+        if (cancelled || enableSeen) return;
+        setShowTapToPayEnable(true);
+      })();
+
+      return () => {
+        cancelled = true;
+      };
+    }, [showTapToPayFeatures]),
+  );
+
+  const openTapToPaySettings = () => {
+    navigation.navigate('AdminTapToPay');
+  };
+
+  const handleIntroGetStarted = async () => {
+    await markTapToPayIntroSeen();
+    setShowTapToPayIntro(false);
+    openTapToPaySettings();
+  };
+
+  const handleIntroDismiss = async () => {
+    await markTapToPayIntroSeen();
+    setShowTapToPayIntro(false);
+    const enableSeen = await hasSeenTapToPayEnablePrompt();
+    if (!enableSeen) {
+      setShowTapToPayEnable(true);
+    }
+  };
+
+  const handleEnableSetUp = async () => {
+    await markTapToPayEnablePromptSeen();
+    setShowTapToPayEnable(false);
+    openTapToPaySettings();
+  };
+
+  const handleEnableLater = async () => {
+    await markTapToPayEnablePromptSeen();
+    setShowTapToPayEnable(false);
+  };
 
   const loadData = async () => {
     await Promise.all([
@@ -173,6 +245,37 @@ export default function AdminDashboardScreen() {
           }
         />
 
+        {showTapToPayFeatures && (
+          <TouchableOpacity
+            activeOpacity={0.85}
+            onPress={openTapToPaySettings}
+          >
+            <Card style={styles.tapToPayCard}>
+              <Card.Content style={styles.tapToPayCardContent}>
+                <View style={styles.tapToPayCardLeft}>
+                  <IconButton
+                    icon="cellphone-nfc"
+                    iconColor={COLORS.primary}
+                    size={28}
+                    style={styles.tapToPayIcon}
+                  />
+                  <View style={styles.tapToPayTextWrap}>
+                    <Text style={styles.tapToPayTitle}>Tap to Pay on iPhone</Text>
+                    <Text style={styles.tapToPayDesc}>
+                      Accept contactless payments for in-person ticket sales
+                    </Text>
+                  </View>
+                </View>
+                <IconButton
+                  icon="chevron-right"
+                  iconColor={COLORS.textLight}
+                  size={24}
+                />
+              </Card.Content>
+            </Card>
+          </TouchableOpacity>
+        )}
+
         <Text style={styles.sectionTitle}>
           Raffles ({filteredForms.length})
         </Text>
@@ -266,7 +369,13 @@ export default function AdminDashboardScreen() {
                           icon="credit-card"
                           iconColor={COLORS.primary}
                           size={20}
-                          onPress={() => navigation.navigate('InPersonPayment', { id: form.id })}
+                          onPress={() => {
+                            if (!canManageTapToPay) {
+                              showTapToPayAdminRequiredAlert();
+                              return;
+                            }
+                            navigation.navigate('InPersonPayment', { id: form.id });
+                          }}
                           style={styles.iconAction}
                         />
                       ) : hasStripe && completed ? (
@@ -294,6 +403,17 @@ export default function AdminDashboardScreen() {
         onPress={handleCreateRaffle}
         loading={isCreating}
         disabled={isCreating}
+      />
+
+      <TapToPayIntroModal
+        visible={showTapToPayIntro}
+        onGetStarted={handleIntroGetStarted}
+        onDismiss={handleIntroDismiss}
+      />
+      <TapToPayEnablePromptModal
+        visible={showTapToPayEnable && !showTapToPayIntro}
+        onSetUp={handleEnableSetUp}
+        onLater={handleEnableLater}
       />
     </View>
   );
@@ -331,6 +451,37 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: COLORS.primary,
     marginBottom: 12,
+  },
+  tapToPayCard: {
+    backgroundColor: COLORS.surface,
+    borderRadius: 12,
+    marginBottom: 16,
+    borderWidth: 1.5,
+    borderColor: COLORS.primary,
+    elevation: 2,
+  },
+  tapToPayCardContent: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 4,
+  },
+  tapToPayCardLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  tapToPayIcon: { margin: 0 },
+  tapToPayTextWrap: { flex: 1 },
+  tapToPayTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: COLORS.foreground,
+  },
+  tapToPayDesc: {
+    fontSize: 12,
+    color: COLORS.textSecondary,
+    marginTop: 2,
   },
   emptyState: {
     padding: 40,

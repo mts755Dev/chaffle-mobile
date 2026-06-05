@@ -1,7 +1,6 @@
 import { useState } from 'react';
 import * as ImagePicker from 'expo-image-picker';
 import { supabase } from '../services/supabase/client';
-import * as FileSystem from 'expo-file-system';
 
 export function useImageUpload() {
   const [isUploading, setIsUploading] = useState(false);
@@ -33,17 +32,11 @@ export function useImageUpload() {
       const fileName = `${Date.now()}.${fileExt}`;
       const filePath = `uploads/${fileName}`;
 
-      // Read file as base64
-      const base64 = await FileSystem.readAsStringAsync(uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-
-      // Convert base64 to Uint8Array
-      const binaryString = atob(base64);
-      const bytes = new Uint8Array(binaryString.length);
-      for (let i = 0; i < binaryString.length; i++) {
-        bytes[i] = binaryString.charCodeAt(i);
+      const response = await fetch(uri);
+      if (!response.ok) {
+        throw new Error('Failed to read image file');
       }
+      const bytes = new Uint8Array(await response.arrayBuffer());
 
       const { data, error: uploadError } = await supabase.storage
         .from(bucket)

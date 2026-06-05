@@ -14,7 +14,9 @@
       "developmentClient": true,
       "distribution": "internal",
       "ios": {
-        "simulator": false
+        "simulator": false,
+        "buildConfiguration": "Debug",
+        "credentialsSource": "local"
       },
       "android": {
         "buildType": "apk"

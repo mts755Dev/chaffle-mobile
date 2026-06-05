@@ -17,14 +17,15 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.chaffleorg.chaffle",
-      "buildNumber": "19",
+      "buildNumber": "22",
       "entitlements": {
         "com.apple.developer.proximity-reader.payment.acceptance": true
       },
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Chaffle needs your location to verify raffle eligibility in your state.",
         "NSCameraUsageDescription": "Chaffle needs camera access to scan QR codes.",
-        "ITSAppUsesNonExemptEncryption": false
+        "ITSAppUsesNonExemptEncryption": false,
+        "CFBundleLocalizations": ["en"]
       }
     },
     "android": {

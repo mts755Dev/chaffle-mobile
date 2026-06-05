@@ -24,6 +24,8 @@ import EditRaffleScreen from '../screens/Admin/EditRaffle/EditRaffleScreen';
 import AdminTicketsScreen from '../screens/Admin/Tickets/AdminTicketsScreen';
 import AdminWinnersScreen from '../screens/Admin/Winners/AdminWinnersScreen';
 import InPersonPaymentScreen from '../screens/Admin/InPersonPayment/InPersonPaymentScreen';
+import AdminTapToPayScreen from '../screens/Admin/TapToPay/AdminTapToPayScreen';
+import TapToPayEducationScreen from '../screens/Admin/TapToPay/TapToPayEducationScreen';
 import PreviewRaffleScreen from '../screens/Admin/PreviewRaffle/PreviewRaffleScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
@@ -185,6 +187,16 @@ export default function AppNavigator() {
           name="InPersonPayment"
           component={InPersonPaymentScreen}
           options={{ title: 'In-Person Payment' }}
+        />
+        <Stack.Screen
+          name="AdminTapToPay"
+          component={AdminTapToPayScreen}
+          options={{ title: 'Tap to Pay on iPhone' }}
+        />
+        <Stack.Screen
+          name="TapToPayEducation"
+          component={TapToPayEducationScreen}
+          options={{ title: 'Tap to Pay Guide' }}
         />
       </Stack.Navigator>
     </NavigationContainer>

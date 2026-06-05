@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   StyleSheet,
@@ -20,7 +20,12 @@ import {
 } from 'react-native-paper';
 import { useRoute, RouteProp, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
-import { StripeTerminalProvider } from '@stripe/stripe-terminal-react-native';
+import { useStripeTerminalAccountScope } from '../../../contexts/StripeTerminalAccountContext';
+import { useAuthStore } from '../../../store/authStore';
+import {
+  canAcceptTapToPayTerms,
+  showTapToPayAdminRequiredAlert,
+} from '../../../utils/tapToPayAccess';
 import { COLORS, TICKET_TIERS } from '../../../constants';
 import { RootStackParamList, DonationForm } from '../../../types';
 import { raffleApi, ticketApi } from '../../../services/api/raffleApi';
@@ -31,7 +36,7 @@ import ErrorScreen from '../../../components/ErrorScreen';
 import { useStripeReader } from '../../../hooks/useStripeReader';
 import ReaderConnectionStatus from '../../../components/ReaderConnectionStatus';
 import PaymentStatusOverlay from '../../../components/PaymentStatus';
-import { fetchConnectionToken } from '../../../services/stripeTerminal';
+import TapToPayCheckoutButton from '../../../components/TapToPayCheckoutButton';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 type InPersonPaymentRouteProp = RouteProp<RootStackParamList, 'InPersonPayment'>;
@@ -39,9 +44,8 @@ type InPersonPaymentRouteProp = RouteProp<RootStackParamList, 'InPersonPayment'>
 type Step = 'tickets' | 'details';
 
 /**
- * Wrapper that loads the raffle FIRST, then mounts StripeTerminalProvider
- * with a dynamic tokenProvider scoped to the raffle's connected Stripe account.
- * This enables direct charges: the SDK authenticates as the connected account.
+ * Loads the raffle, then scopes the app-wide Terminal token provider to this
+ * raffle's connected Stripe account for direct charges.
  */
 export default function InPersonPaymentScreen() {
   const route = useRoute<InPersonPaymentRouteProp>();
@@ -78,23 +82,38 @@ export default function InPersonPaymentScreen() {
   if (loadError) return <ErrorScreen message={loadError} onRetry={loadRaffle} />;
   if (!raffle) return <ErrorScreen message="Raffle not found" />;
 
-  const stripeAccountId = (raffle.stripeAccount as any)?.id as string | undefined;
-
-  return (
-    <StripeTerminalProvider
-      key={stripeAccountId || 'platform'}
-      logLevel={__DEV__ ? 'verbose' : 'none'}
-      tokenProvider={() => fetchConnectionToken(stripeAccountId)}
-    >
-      <InPersonPaymentContent raffle={raffle} />
-    </StripeTerminalProvider>
-  );
+  return <InPersonPaymentContent raffle={raffle} />;
 }
 
 function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
   const route = useRoute<InPersonPaymentRouteProp>();
   const navigation = useNavigation<NavigationProp>();
   const { id } = route.params;
+  const { isAdmin, canManageTapToPay } = useAuthStore();
+
+  const stripeAccountId = (raffle.stripeAccount as any)?.id as string | undefined;
+  useStripeTerminalAccountScope(stripeAccountId);
+
+  useEffect(() => {
+    if (!stripeAccountId) {
+      Alert.alert(
+        'Stripe required',
+        'This raffle does not have Stripe connected. Link Stripe on the raffle before using Tap to Pay.',
+        [{ text: 'OK', onPress: () => navigation.goBack() }],
+      );
+    }
+  }, [stripeAccountId, navigation]);
+
+  useEffect(() => {
+    if (!canAcceptTapToPayTerms(isAdmin, canManageTapToPay)) {
+      showTapToPayAdminRequiredAlert();
+      navigation.goBack();
+    }
+  }, [isAdmin, canManageTapToPay, navigation]);
+
+  if (!canAcceptTapToPayTerms(isAdmin, canManageTapToPay)) {
+    return null;
+  }
 
   // Ticket selection
   const [selectedTier, setSelectedTier] = useState<{ price: number; quantity: number } | null>(null);
@@ -113,27 +132,32 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
   const [snackMessage, setSnackMessage] = useState('');
 
   // ── Stripe Terminal Hook ────────────────────────────────────────────
-  const stripeAccountId = (raffle.stripeAccount as any)?.id as string | undefined;
-
   const {
     connectedReader,
     connectionStatus,
     autoConnect,
     disconnectReader,
     paymentStatus,
+    paymentOutcome,
     paymentResult,
     paymentError,
-    collectPayment,
+    readerUpdateProgress,
+    collectPaymentWithReaderReady,
     cancelPayment,
     resetPayment,
   } = useStripeReader({ stripeAccount: stripeAccountId });
 
-  // Auto-connect Tap to Pay when screen mounts
+  const hasAutoConnectedRef = useRef<string | undefined>(undefined);
+  const lastTicketIdRef = useRef<string | null>(null);
+  const [checkoutBusy, setCheckoutBusy] = useState(false);
+
+  // Auto-connect after raffle Stripe account is scoped (avoids platform/connected mismatch)
   useEffect(() => {
-    if (connectionStatus === 'not_connected') {
-      autoConnect();
-    }
-  }, []);
+    if (!stripeAccountId) return;
+    if (hasAutoConnectedRef.current === stripeAccountId) return;
+    hasAutoConnectedRef.current = stripeAccountId;
+    void autoConnect();
+  }, [stripeAccountId, autoConnect]);
 
   // ── Step navigation ─────────────────────────────────────────────────
   const handleProceedToDetails = () => {
@@ -157,10 +181,7 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
     if (!buyerAddress.trim() || buyerAddress.length < 5) { Alert.alert('Required', 'Please enter a valid address'); return; }
     if (!selectedTier) return;
 
-    if (connectionStatus !== 'connected') {
-      Alert.alert('Not Ready', 'Tap to Pay is not connected. Please wait or tap Reconnect.');
-      return;
-    }
+    setCheckoutBusy(true);
 
     try {
       const ip = await getPublicIp().catch(() => 'in-person');
@@ -177,10 +198,10 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
         ip: ip || 'in-person',
         paid: false,
       });
+      lastTicketIdRef.current = ticket.id;
 
-      // 2. Collect payment via the connected Stripe Terminal reader
-      // Pass base price — the Edge Function adds the 10% fee on top if isApplicationAmount is true
-      const result = await collectPayment(
+      // 2. Collect payment via Tap to Pay (initializes reader if needed)
+      const result = await collectPaymentWithReaderReady(
         selectedTier.price,
         {
           raffleId: id,
@@ -209,9 +230,25 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
         `Payment successful! ${selectedTier.quantity} ticket(s) for ${buyerName}`
       );
     } catch {
-      // Payment error is already surfaced via paymentError state from the hook.
-      // The admin can retry or cancel from the PaymentStatusOverlay.
+      // Payment error is surfaced via PaymentStatusOverlay (declined / timed out).
+    } finally {
+      setCheckoutBusy(false);
     }
+  };
+
+  const handleSendEmailReceipt = async () => {
+    if (!buyerEmail.trim() || !selectedTier) {
+      throw new Error('Customer email is required to send a receipt.');
+    }
+    const ticketNumber = lastTicketIdRef.current;
+    if (!ticketNumber) {
+      throw new Error('No ticket reference for this payment.');
+    }
+    await stripeApi.sendPurchaseEmail({
+      email: buyerEmail.trim(),
+      quantity: selectedTier.quantity,
+      ticketNumber,
+    });
   };
 
   const handleCancelPayment = () => {
@@ -225,6 +262,7 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
 
   const handleNewSale = () => {
     resetPayment();
+    lastTicketIdRef.current = null;
     setCurrentStep('tickets');
     setBuyerName('');
     setBuyerEmail('');
@@ -235,6 +273,9 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
   };
 
   const isConnected = connectionStatus === 'connected';
+  const showCheckoutFooter =
+    paymentStatus === 'idle' && currentStep === 'details' && !!selectedTier;
+  const paymentActive = paymentStatus !== 'idle';
 
   return (
     <KeyboardAvoidingView
@@ -243,7 +284,10 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
     >
       <ScrollView
         style={styles.flex}
-        contentContainerStyle={styles.content}
+        contentContainerStyle={[
+          styles.content,
+          showCheckoutFooter && styles.contentWithFooter,
+        ]}
         keyboardShouldPersistTaps="handled"
       >
         {/* ── Header ──────────────────────────────────────────────── */}
@@ -264,6 +308,7 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
               status={connectionStatus}
               reader={connectedReader}
               onDisconnect={disconnectReader}
+              updateProgress={readerUpdateProgress}
             />
 
             {!isConnected && connectionStatus !== 'connecting' && (
@@ -283,16 +328,23 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
         </Card>
 
         {/* ── Payment Status Overlay ──────────────────────────────── */}
-        <PaymentStatusOverlay
-          status={paymentStatus}
-          error={paymentError}
-          result={paymentResult}
-          amountInDollars={selectedTier?.price || 0}
-          ticketQuantity={selectedTier?.quantity || 0}
-          onCancel={handleCancelPayment}
-          onRetry={handleRetryPayment}
-          onNewSale={handleNewSale}
-        />
+        {paymentActive && (
+          <PaymentStatusOverlay
+            status={paymentStatus}
+            outcome={paymentOutcome}
+            error={paymentError}
+            result={paymentResult}
+            amountInDollars={selectedTier?.price || 0}
+            ticketQuantity={selectedTier?.quantity || 0}
+            buyerName={buyerName}
+            buyerEmail={buyerEmail}
+            ticketId={lastTicketIdRef.current ?? undefined}
+            onSendEmailReceipt={handleSendEmailReceipt}
+            onCancel={handleCancelPayment}
+            onRetry={handleRetryPayment}
+            onNewSale={handleNewSale}
+          />
+        )}
 
         {paymentStatus === 'idle' && currentStep === 'tickets' ? (
           /* ── Step 1: Select Tickets ─────────────────────────────── */
@@ -474,26 +526,13 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
                 activeOutlineColor={COLORS.primary}
               />
 
-              {/* Back + Collect buttons */}
-              <View style={styles.detailActions}>
-                <Button
-                  mode="outlined"
-                  onPress={handleBackToTickets}
-                  style={styles.backButton}
-                >
-                  Back
-                </Button>
-                <Button
-                  mode="contained"
-                  icon="credit-card"
-                  onPress={handleCollectPayment}
-                  disabled={!isConnected}
-                  style={styles.collectButton}
-                  contentStyle={styles.collectContent}
-                >
-                  {`Collect ${formatCurrency(selectedTier?.price || 0)}`}
-                </Button>
-              </View>
+              <Button
+                mode="outlined"
+                onPress={handleBackToTickets}
+                style={styles.backButtonOnly}
+              >
+                Back to tickets
+              </Button>
             </Card.Content>
           </Card>
         ) : null}
@@ -529,6 +568,14 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
         </Card>
       </ScrollView>
 
+      {showCheckoutFooter && (
+        <TapToPayCheckoutButton
+          amountFormatted={formatCurrency(selectedTier.price)}
+          onPress={handleCollectPayment}
+          loading={checkoutBusy}
+        />
+      )}
+
       <Snackbar
         visible={!!snackMessage}
         onDismiss={() => setSnackMessage('')}
@@ -544,6 +591,7 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
 const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: COLORS.background },
   content: { padding: 16, paddingBottom: 40 },
+  contentWithFooter: { paddingBottom: 16 },
 
   /* Header */
   header: { alignItems: 'center', marginBottom: 20 },
@@ -595,11 +643,7 @@ const styles = StyleSheet.create({
   /* Input */
   input: { backgroundColor: COLORS.surface, marginBottom: 8 },
 
-  /* Detail actions */
-  detailActions: { flexDirection: 'row', gap: 12, marginTop: 12 },
-  backButton: { flex: 1, borderColor: COLORS.border, borderRadius: 8 },
-  collectButton: { flex: 1, backgroundColor: COLORS.primary, borderRadius: 8 },
-  collectContent: { paddingVertical: 8 },
+  backButtonOnly: { marginTop: 12, borderColor: COLORS.border, borderRadius: 8 },
 
   /* Error */
   errorCard: { backgroundColor: '#FEF2F2', borderRadius: 12, marginBottom: 16, borderWidth: 1, borderColor: '#FECACA' },

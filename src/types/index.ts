@@ -121,11 +121,14 @@ export type ReaderConnectionStatus = 'not_connected' | 'connecting' | 'connected
 
 export type TerminalPaymentStatus =
   | 'idle'
+  | 'initializing'
   | 'creating_intent'
   | 'waiting_for_input'
   | 'processing'
   | 'success'
   | 'error';
+
+export type TerminalPaymentOutcome = 'approved' | 'declined' | 'timed_out';
 
 export interface TerminalPaymentResult {
   paymentIntentId: string;
@@ -153,6 +156,8 @@ export type RootStackParamList = {
   AdminTickets: undefined;
   AdminWinners: undefined;
   InPersonPayment: { id: string };
+  AdminTapToPay: undefined;
+  TapToPayEducation: undefined;
   StripeConnectLink: { raffleId: string };
 };
 

@@ -13,13 +13,18 @@ interface ReaderConnectionStatusProps {
   status: ConnectionStatusType;
   reader: Reader.Type | null;
   onDisconnect: () => void;
+  /** 0–1 while the Tap to Pay reader software is installing (first setup). */
+  updateProgress?: number | null;
 }
 
 export default function ReaderConnectionStatus({
   status,
   reader,
   onDisconnect,
+  updateProgress,
 }: ReaderConnectionStatusProps) {
+  const isUpdating = updateProgress != null && status === 'connecting';
+  const updatePercent = isUpdating ? Math.round(updateProgress * 100) : null;
   const badgeStyle =
     status === 'connected'
       ? styles.badgeConnected
@@ -30,9 +35,11 @@ export default function ReaderConnectionStatus({
   const badgeLabel =
     status === 'connected'
       ? 'Ready'
-      : status === 'connecting'
-        ? 'Setting up…'
-        : 'Not Connected';
+      : isUpdating
+        ? `Updating ${updatePercent}%`
+        : status === 'connecting'
+          ? 'Setting up…'
+          : 'Not Connected';
 
   const iconName =
     status === 'connected'
@@ -58,9 +65,11 @@ export default function ReaderConnectionStatus({
             <Text style={styles.description}>
               {status === 'connected'
                 ? `iPhone is ready to accept payments${reader?.simulated ? ' (Simulated)' : ''}`
-                : status === 'connecting'
-                  ? 'Setting up Tap to Pay…'
-                  : 'Tap to Pay is not connected'}
+                : isUpdating
+                  ? `Installing Tap to Pay software… ${updatePercent}%`
+                  : status === 'connecting'
+                    ? 'Setting up Tap to Pay…'
+                    : 'Tap to Pay is not connected'}
             </Text>
           </View>
         </View>

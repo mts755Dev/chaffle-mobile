@@ -8,6 +8,7 @@ import { StyleSheet } from 'react-native';
 import { Text, Button, Divider, Card } from 'react-native-paper';
 import { COLORS } from '../constants';
 import ReaderConnectionStatus from './ReaderConnectionStatus';
+import TapToPayIcon from './TapToPayIcon';
 import type { Reader } from '@stripe/stripe-terminal-react-native';
 import type { ReaderConnectionStatus as ConnectionStatusType } from '../types';
 import { getTapToPayTermsAcceptedFromApple } from '../services/tapToPayTermsState';
@@ -48,7 +49,7 @@ export default function TapToPayConnectionPanel({
 
         {termsAccepted === true && status !== 'connected' && (
           <Text style={styles.termsHint}>
-            Apple Terms accepted on this device. Finish setup to go Ready.
+            Apple Tap to Pay on iPhone Terms accepted on this device. Finish setup to go Ready.
           </Text>
         )}
 
@@ -57,7 +58,9 @@ export default function TapToPayConnectionPanel({
             <Divider style={styles.divider} />
             <Button
               mode="contained"
-              icon="cellphone-nfc"
+              icon={({ size, color }) => (
+                <TapToPayIcon size={size} color={color} filled />
+              )}
               onPress={onEnable}
               style={styles.enableBtn}
               buttonColor={COLORS.primary}
@@ -65,7 +68,7 @@ export default function TapToPayConnectionPanel({
               {enableLabel}
             </Button>
             <Text style={styles.enableHint}>
-              Accept Apple&apos;s Tap to Pay Terms when prompted, then wait for setup to complete.
+              Accept Apple&apos;s Tap to Pay on iPhone Terms when prompted, then wait for setup to complete.
             </Text>
           </>
         )}

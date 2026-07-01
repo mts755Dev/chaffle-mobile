@@ -1,6 +1,16 @@
 import apiClient from './client';
 import { supabase } from '../supabase/client';
-import { API_BASE_URL } from '../../constants';
+import { API_BASE_URL, SUPABASE_ANON_KEY, SUPABASE_URL } from '../../constants';
+
+function assertSupabaseConfigured(): void {
+  const url = SUPABASE_URL?.trim();
+  const key = SUPABASE_ANON_KEY?.trim();
+  if (!url || !key || url.includes('placeholder')) {
+    throw new Error(
+      'Payment service is not configured in this app build. Install the latest TestFlight build.',
+    );
+  }
+}
 
 /**
  * Stripe API calls
@@ -102,22 +112,11 @@ export const stripeApi = {
   },
 
   /**
-   * Create Terminal connection token (admin - in person payments)
-   */
-  createTerminalConnectionToken: async (_locationId?: string) => {
-    const { data, error } = await supabase.functions.invoke('terminal-connection-token', {
-      body: {},
-    });
-    if (error) throw new Error(error.message || 'Failed to create connection token');
-    if (data?.error) throw new Error(data.error);
-    return data as { secret: string };
-  },
-
-  /**
    * Get or create a default Stripe Terminal Location via Edge Function.
    * Required for Bluetooth reader connections.
    */
   getOrCreateTerminalLocation: async (stripeAccount?: string): Promise<string> => {
+    assertSupabaseConfigured();
     const { data, error } = await supabase.functions.invoke('get-terminal-location', {
       body: { stripeAccount },
     });
@@ -139,6 +138,7 @@ export const stripeApi = {
     stripeAccount?: string;
     isApplicationAmount?: boolean;
   }) => {
+    assertSupabaseConfigured();
     const { data, error } = await supabase.functions.invoke('terminal-payment-intent', {
       body: { action: 'create', ...params },
     });
@@ -175,5 +175,28 @@ export const stripeApi = {
     if (error) throw new Error(error.message || 'Failed to cancel terminal payment');
     if (data?.error) throw new Error(data.error);
     return data as { id: string; status: string };
+  },
+
+  /**
+   * Generate a Stripe Terminal Onboarding Link for Apple Tap to Pay T&C.
+   * With allow_relinking=true, this lets accounts re-accept T&C after
+   * the merchant ID was removed from Apple Business.
+   */
+  createTerminalOnboardingLink: async (params?: {
+    stripeAccount?: string;
+    merchantDisplayName?: string;
+    allowRelinking?: boolean;
+  }): Promise<string> => {
+    const { data, error } = await supabase.functions.invoke('terminal-onboarding-link', {
+      body: {
+        stripeAccount: params?.stripeAccount,
+        merchantDisplayName: params?.merchantDisplayName ?? 'Chaffle',
+        allowRelinking: params?.allowRelinking ?? true,
+      },
+    });
+    if (error) throw new Error(error.message || 'Failed to create onboarding link');
+    if (data?.error) throw new Error(data.error);
+    if (!data?.redirect_url) throw new Error('No redirect URL returned');
+    return data.redirect_url;
   },
 };

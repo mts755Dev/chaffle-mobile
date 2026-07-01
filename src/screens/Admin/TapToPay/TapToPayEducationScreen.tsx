@@ -1,5 +1,7 @@
 /**
- * Merchant education reference (4.3, 4.4 fallback) — Settings / Help section.
+ * Merchant education reference (4.2) — Settings / Help section.
+ * Apple official ProximityReaderDiscovery is primary (4.3–4.5).
+ * Custom copy below is fallback only when Apple's system UI is unavailable.
  */
 
 import React, { useState } from 'react';
@@ -23,7 +25,7 @@ export default function TapToPayEducationScreen() {
     setAppleStatus(null);
     const result = await presentAppleTapToPayEducation();
     if (result.source === 'apple-proximity-reader-discovery') {
-      setAppleStatus('Apple education completed.');
+      setAppleStatus('Apple merchant education completed.');
     } else {
       setAppleStatus(result.reason);
     }
@@ -31,19 +33,20 @@ export default function TapToPayEducationScreen() {
 
   return (
     <ScrollView style={styles.flex} contentContainerStyle={styles.content}>
-      <Text style={styles.heading}>Tap to Pay — Merchant Guide</Text>
+      <Text style={styles.heading}>Tap to Pay on iPhone — Merchant Education</Text>
       <Text style={styles.subheading}>
-        Reference for accepting in-person contactless payments. Region: {TAP_TO_PAY_EDUCATION_REGION}.
+        Learn how to accept contactless cards, Apple Pay, and digital wallets. Region:{' '}
+        {TAP_TO_PAY_EDUCATION_REGION}.
       </Text>
 
       {Platform.OS === 'ios' && (
         <Card style={styles.appleCard}>
           <Card.Content>
-            <Text style={styles.appleTitle}>Apple official tutorial</Text>
+            <Text style={styles.appleTitle}>Apple official tutorial (required)</Text>
             <Text style={styles.appleDesc}>
               {canUseApple
-                ? 'Opens Apple\'s localized education for Tap to Pay on iPhone (iOS 18+).'
-                : 'Requires iOS 18 or later. Use the guide below on older versions.'}
+                ? 'Opens Apple\'s localized merchant education for Tap to Pay on iPhone. This is the tutorial Apple requires for App Review.'
+                : 'Requires iOS 18+ and a current iOS build with ProximityReaderDiscovery. Rebuild with: eas build -p ios --profile development'}
             </Text>
             <Button
               mode="contained"
@@ -53,7 +56,7 @@ export default function TapToPayEducationScreen() {
               style={styles.appleBtn}
               buttonColor={COLORS.primary}
             >
-              View Apple Education
+              View Apple Tap to Pay on iPhone Tutorial
             </Button>
             {appleStatus && (
               <Text style={styles.appleStatus}>{appleStatus}</Text>
@@ -62,22 +65,30 @@ export default function TapToPayEducationScreen() {
         </Card>
       )}
 
-      <Divider style={styles.divider} />
+      {!canUseApple && (
+        <>
+          <Divider style={styles.divider} />
+          <Text style={styles.fallbackNote}>
+            Apple&apos;s system tutorial is unavailable on this device or build. Use the reference
+            guide below until you install an iOS 18+ development build.
+          </Text>
 
-      {TAP_TO_PAY_EDUCATION_SECTIONS.map((section) => (
-        <Card key={section.id} style={styles.sectionCard}>
-          <Card.Content>
-            <Text style={styles.sectionTitle}>{section.title}</Text>
-            <Text style={styles.sectionBody}>{section.body}</Text>
-            {section.bullets?.map((bullet) => (
-              <View key={bullet} style={styles.bulletRow}>
-                <Text style={styles.bulletDot}>•</Text>
-                <Text style={styles.bulletText}>{bullet}</Text>
-              </View>
-            ))}
-          </Card.Content>
-        </Card>
-      ))}
+          {TAP_TO_PAY_EDUCATION_SECTIONS.map((section) => (
+            <Card key={section.id} style={styles.sectionCard}>
+              <Card.Content>
+                <Text style={styles.sectionTitle}>{section.title}</Text>
+                <Text style={styles.sectionBody}>{section.body}</Text>
+                {section.bullets?.map((bullet) => (
+                  <View key={bullet} style={styles.bulletRow}>
+                    <Text style={styles.bulletDot}>•</Text>
+                    <Text style={styles.bulletText}>{bullet}</Text>
+                  </View>
+                ))}
+              </Card.Content>
+            </Card>
+          ))}
+        </>
+      )}
     </ScrollView>
   );
 }
@@ -93,6 +104,13 @@ const styles = StyleSheet.create({
   appleBtn: { borderRadius: 8 },
   appleStatus: { fontSize: 12, color: COLORS.textSecondary, marginTop: 10 },
   divider: { marginVertical: 16 },
+  fallbackNote: {
+    fontSize: 13,
+    color: COLORS.textSecondary,
+    lineHeight: 18,
+    marginBottom: 12,
+    fontStyle: 'italic',
+  },
   sectionCard: { marginBottom: 12, backgroundColor: COLORS.surface },
   sectionTitle: { fontSize: 15, fontWeight: '700', color: COLORS.foreground, marginBottom: 6 },
   sectionBody: { fontSize: 13, color: COLORS.textSecondary, lineHeight: 19, marginBottom: 8 },

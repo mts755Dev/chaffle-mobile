@@ -156,7 +156,7 @@ export type RootStackParamList = {
   AdminTickets: undefined;
   AdminWinners: undefined;
   InPersonPayment: { id: string };
-  AdminTapToPay: undefined;
+  AdminTapToPay: { startSetup?: boolean };
   TapToPayEducation: undefined;
   StripeConnectLink: { raffleId: string };
 };

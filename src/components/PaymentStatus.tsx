@@ -22,6 +22,7 @@ import type {
   TerminalPaymentResult,
   TerminalPaymentOutcome,
 } from '../types';
+import TapToPayIcon from './TapToPayIcon';
 
 interface PaymentStatusProps {
   status: TerminalPaymentStatus;
@@ -149,7 +150,7 @@ export default function PaymentStatusOverlay({
 
         {status === 'waiting_for_input' && (
           <>
-            <Icon source="contactless-payment" size={64} color={COLORS.primary} />
+            <TapToPayIcon size={64} color={COLORS.primary} filled />
             <Text style={styles.title}>Tap to Pay on iPhone</Text>
             <Text style={styles.subtitle}>
               Ask the customer to hold their card or device near the top of your iPhone.

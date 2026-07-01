@@ -27,7 +27,7 @@ export default function TapToPayEnablePromptModal({
           <View style={styles.card}>
             <Text style={styles.title}>Enable Tap to Pay on iPhone</Text>
             <Text style={styles.message}>
-              You&apos;re ready to accept contactless payments. Set up Tap to Pay now — it only takes a few minutes.
+              You&apos;re ready to accept contactless payments. Set up Tap to Pay on iPhone now — it only takes a few minutes.
               You&apos;ll accept Apple&apos;s Terms & Conditions on this device.
             </Text>
             <Button
@@ -36,7 +36,7 @@ export default function TapToPayEnablePromptModal({
               style={styles.btn}
               buttonColor={COLORS.primary}
             >
-              Set Up Tap to Pay
+              Set Up Tap to Pay on iPhone
             </Button>
             <Button mode="text" onPress={onLater} textColor={COLORS.textSecondary}>
               Later

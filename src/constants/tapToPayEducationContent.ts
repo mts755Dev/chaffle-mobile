@@ -1,6 +1,8 @@
 /**
- * In-app merchant education (Apple Marketing Guide–aligned fallback when
- * ProximityReaderDiscovery is unavailable, e.g. iOS < 18).
+ * Fallback merchant education copy when Apple's ProximityReaderDiscovery
+ * system UI is unavailable (iOS < 18 or missing native module).
+ * Do NOT use as primary education when Apple tutorial is available — Apple
+ * requires marketing-guideline-compliant system content for review (4.3–4.5).
  */
 
 export const TAP_TO_PAY_EDUCATION_REGION = 'US' as const;
@@ -50,7 +52,7 @@ export const TAP_TO_PAY_EDUCATION_SECTIONS: TapToPayEducationSection[] = [
       'Some cards are not able to complete contactless transactions using a PIN. If this occurs, simply ask the customer if they have an alternative contactless card or digital wallet and continue the transaction using Tap to Pay on iPhone.',
     bullets: [
       'You can also complete the sale online: share the raffle link so the customer pays with a card in their browser (Payment Link).',
-      'For in-person sales in Chaffle, open In-Person Payment on the raffle after Tap to Pay is set up.',
+      'For in-person sales in Chaffle, open Tap to Pay on iPhone on the raffle after setup is complete.',
     ],
   },
 ];

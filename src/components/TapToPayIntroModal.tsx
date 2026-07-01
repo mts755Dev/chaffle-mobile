@@ -4,8 +4,9 @@
 
 import React from 'react';
 import { Modal, View, StyleSheet, Platform } from 'react-native';
-import { Text, Button, Icon } from 'react-native-paper';
+import { Text, Button } from 'react-native-paper';
 import { COLORS } from '../constants';
+import TapToPayIcon from './TapToPayIcon';
 
 interface TapToPayIntroModalProps {
   visible: boolean;
@@ -24,7 +25,7 @@ export default function TapToPayIntroModal({
     <Modal visible={visible} animationType="slide" presentationStyle="fullScreen">
       <View style={styles.container}>
         <View style={styles.hero}>
-          <Icon source="cellphone-nfc" size={72} color={COLORS.white} />
+          <TapToPayIcon size={72} color={COLORS.white} filled />
           <Text style={styles.title}>Tap to Pay on iPhone</Text>
           <Text style={styles.subtitle}>
             Accept in-person contactless payments for raffle tickets — no extra card reader required.
@@ -33,12 +34,14 @@ export default function TapToPayIntroModal({
 
         <View style={styles.body}>
           <Text style={styles.bodyText}>
-            Chaffle uses Apple&apos;s secure Tap to Pay technology so you can sell tickets on-site with a tap of the
+            Chaffle uses Apple&apos;s secure Tap to Pay on iPhone technology so you can sell tickets on-site with a tap of the
             customer&apos;s card or phone.
           </Text>
           <Button
             mode="contained"
-            icon="cellphone-nfc"
+            icon={({ size, color }) => (
+              <TapToPayIcon size={size} color={color} filled />
+            )}
             onPress={onGetStarted}
             style={styles.primaryBtn}
             buttonColor={COLORS.primary}

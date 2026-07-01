@@ -1,13 +1,14 @@
 /**
- * ReaderConnectionStatus — Displays Tap to Pay connection status.
+ * ReaderConnectionStatus — Displays Tap to Pay on iPhone connection status.
  */
 
 import React from 'react';
 import { View, StyleSheet } from 'react-native';
-import { Text, Chip, Icon, Button } from 'react-native-paper';
+import { Text, Chip, Button } from 'react-native-paper';
 import { type Reader } from '@stripe/stripe-terminal-react-native';
 import { COLORS } from '../constants';
 import type { ReaderConnectionStatus as ConnectionStatusType } from '../types';
+import TapToPayIcon from './TapToPayIcon';
 
 interface ReaderConnectionStatusProps {
   status: ConnectionStatusType;
@@ -41,13 +42,6 @@ export default function ReaderConnectionStatus({
           ? 'Setting up…'
           : 'Not Connected';
 
-  const iconName =
-    status === 'connected'
-      ? 'cellphone-nfc'
-      : status === 'connecting'
-        ? 'cellphone-arrow-down'
-        : 'cellphone-off';
-
   const iconColor =
     status === 'connected'
       ? COLORS.success
@@ -59,17 +53,21 @@ export default function ReaderConnectionStatus({
     <View style={styles.container}>
       <View style={styles.headerRow}>
         <View style={styles.headerLeft}>
-          <Icon source={iconName} size={22} color={iconColor} />
+          <TapToPayIcon
+            size={22}
+            color={iconColor}
+            filled={status === 'connected'}
+          />
           <View style={styles.headerText}>
-            <Text style={styles.title}>Tap to Pay</Text>
+            <Text style={styles.title}>Tap to Pay on iPhone</Text>
             <Text style={styles.description}>
               {status === 'connected'
                 ? `iPhone is ready to accept payments${reader?.simulated ? ' (Simulated)' : ''}`
                 : isUpdating
-                  ? `Installing Tap to Pay software… ${updatePercent}%`
+                  ? `Installing Tap to Pay on iPhone software… ${updatePercent}%`
                   : status === 'connecting'
-                    ? 'Setting up Tap to Pay…'
-                    : 'Tap to Pay is not connected'}
+                    ? 'Setting up Tap to Pay on iPhone…'
+                    : 'Tap to Pay on iPhone is not connected'}
             </Text>
           </View>
         </View>

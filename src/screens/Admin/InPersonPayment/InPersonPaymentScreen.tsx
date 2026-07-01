@@ -37,6 +37,7 @@ import { useStripeReader } from '../../../hooks/useStripeReader';
 import ReaderConnectionStatus from '../../../components/ReaderConnectionStatus';
 import PaymentStatusOverlay from '../../../components/PaymentStatus';
 import TapToPayCheckoutButton from '../../../components/TapToPayCheckoutButton';
+import TapToPayIcon from '../../../components/TapToPayIcon';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 type InPersonPaymentRouteProp = RouteProp<RootStackParamList, 'InPersonPayment'>;
@@ -92,13 +93,14 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
   const { isAdmin, canManageTapToPay } = useAuthStore();
 
   const stripeAccountId = (raffle.stripeAccount as any)?.id as string | undefined;
+  const merchantDisplayName = raffle.title?.trim() || 'Raffle';
   useStripeTerminalAccountScope(stripeAccountId);
 
   useEffect(() => {
     if (!stripeAccountId) {
       Alert.alert(
         'Stripe required',
-        'This raffle does not have Stripe connected. Link Stripe on the raffle before using Tap to Pay.',
+        'This raffle does not have Stripe connected. Link Stripe on the raffle before using Tap to Pay on iPhone.',
         [{ text: 'OK', onPress: () => navigation.goBack() }],
       );
     }
@@ -145,7 +147,7 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
     collectPaymentWithReaderReady,
     cancelPayment,
     resetPayment,
-  } = useStripeReader({ stripeAccount: stripeAccountId });
+  } = useStripeReader({ stripeAccount: stripeAccountId, merchantDisplayName });
 
   const hasAutoConnectedRef = useRef<string | undefined>(undefined);
   const lastTicketIdRef = useRef<string | null>(null);
@@ -173,8 +175,28 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
   };
 
   // ── Payment handler ─────────────────────────────────────────────────
+  const ensureTicket = async (): Promise<string> => {
+    if (lastTicketIdRef.current) return lastTicketIdRef.current;
+    if (!selectedTier) throw new Error('No ticket package selected');
+
+    const ip = await getPublicIp().catch(() => 'in-person');
+
+    const ticket = await ticketApi.createTicket({
+      email: buyerEmail,
+      name: buyerName,
+      phone: buyerPhone,
+      address: buyerAddress,
+      amount: selectedTier.price,
+      quantity: selectedTier.quantity,
+      raffleId: id,
+      ip: ip || 'in-person',
+      paid: false,
+    });
+    lastTicketIdRef.current = ticket.id;
+    return ticket.id;
+  };
+
   const handleCollectPayment = async () => {
-    // Validate form
     if (!buyerName.trim()) { Alert.alert('Required', 'Name is required'); return; }
     if (!buyerEmail.trim() || !buyerEmail.includes('@')) { Alert.alert('Required', 'Valid email is required'); return; }
     if (!buyerPhone.trim()) { Alert.alert('Required', 'Phone number is required'); return; }
@@ -184,46 +206,31 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
     setCheckoutBusy(true);
 
     try {
-      const ip = await getPublicIp().catch(() => 'in-person');
+      const ticketId = await ensureTicket();
 
-      // 1. Create ticket record in the database (unpaid)
-      const ticket = await ticketApi.createTicket({
-        email: buyerEmail,
-        name: buyerName,
-        phone: buyerPhone,
-        address: buyerAddress,
-        amount: selectedTier.price,
-        quantity: selectedTier.quantity,
-        raffleId: id,
-        ip: ip || 'in-person',
-        paid: false,
-      });
-      lastTicketIdRef.current = ticket.id;
-
-      // 2. Collect payment via Tap to Pay (initializes reader if needed)
       const result = await collectPaymentWithReaderReady(
         selectedTier.price,
         {
           raffleId: id,
+          raffleName: merchantDisplayName,
+          description: `${merchantDisplayName} — in-person ticket purchase`,
           buyerEmail,
           buyerName,
           quantity: String(selectedTier.quantity),
-          ticketId: ticket.id,
+          ticketId,
         },
         platformFee,
       );
 
-      // 4. Mark ticket as paid in the database
-      await ticketApi.updateTicket(ticket.id, {
+      await ticketApi.updateTicket(ticketId, {
         paid: true,
         stripeSession: { paymentIntentId: result.paymentIntentId },
       });
 
-      // 5. Send confirmation email (fire-and-forget, don't block success)
       stripeApi.sendPurchaseEmail({
         email: buyerEmail,
         quantity: selectedTier.quantity,
-        ticketNumber: ticket.id,
+        ticketNumber: ticketId,
       }).catch((err) => console.warn('Confirmation email failed:', err.message));
 
       setSnackMessage(
@@ -292,7 +299,7 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
       >
         {/* ── Header ──────────────────────────────────────────────── */}
         <View style={styles.header}>
-          <Text style={styles.heading}>In-Person Payment</Text>
+          <Text style={styles.heading}>Tap to Pay on iPhone</Text>
           <Text style={styles.subtitle}>
             Accept card payments using Tap to Pay on iPhone
           </Text>
@@ -316,11 +323,13 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
                 <Divider style={styles.readerDivider} />
                 <Button
                   mode="outlined"
-                  icon="cellphone-nfc"
+                  icon={({ size, color }) => (
+                    <TapToPayIcon size={size} color={color} />
+                  )}
                   onPress={autoConnect}
                   style={{ borderColor: COLORS.border, borderRadius: 8 }}
                 >
-                  Reconnect Tap to Pay
+                  Reconnect Tap to Pay on iPhone
                 </Button>
               </>
             )}
@@ -366,20 +375,17 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
               <View style={styles.tierGrid}>
                 {TICKET_TIERS.map((tier) => {
                   const isSelected = selectedTier?.price === tier.price;
-                  const disabled = !isConnected;
                   return (
                     <View
                       key={tier.price}
                       style={[
                         styles.tierCard,
                         isSelected && styles.tierCardSelected,
-                        disabled && styles.tierCardDisabled,
                       ]}
                     >
                       <Button
                         mode="text"
                         onPress={() =>
-                          !disabled &&
                           setSelectedTier({
                             price: tier.price,
                             quantity: tier.quantity,
@@ -387,7 +393,6 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
                         }
                         style={styles.tierButton}
                         contentStyle={styles.tierButtonContent}
-                        disabled={disabled}
                       >
                         <View style={styles.tierInner}>
                           <Text style={styles.tierQty}>
@@ -410,7 +415,6 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
                   status={platformFee ? 'checked' : 'unchecked'}
                   onPress={() => setPlatformFee(!platformFee)}
                   color={COLORS.primary}
-                  disabled={!isConnected}
                 />
                 <Text style={styles.feeLabel}>
                   Help support our platform by donating 10%
@@ -434,7 +438,7 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
                 mode="contained"
                 icon="account"
                 onPress={handleProceedToDetails}
-                disabled={!isConnected || !selectedTier}
+                disabled={!selectedTier}
                 style={styles.continueButton}
                 contentStyle={styles.continueContent}
               >
@@ -553,10 +557,10 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
               How to use:
             </Text>
             {[
-              'Tap to Pay connects automatically when this screen opens',
+              'Tap to Pay on iPhone connects automatically when this screen opens',
               'Select the ticket package for the customer',
               "Enter the buyer's details (name, email, phone, address)",
-              'Tap "Collect" — hold the customer\'s card near the top of your iPhone',
+              'Tap "Tap to Pay on iPhone" — hold the customer\'s card near the top of your iPhone',
               'Keep the card near the phone until the payment is confirmed',
             ].map((step, i) => (
               <View key={i} style={styles.instructionRow}>

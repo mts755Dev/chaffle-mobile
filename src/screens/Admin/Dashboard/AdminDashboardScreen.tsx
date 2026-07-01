@@ -26,18 +26,8 @@ import { useRaffleStore } from '../../../store/raffleStore';
 import { useAuthStore } from '../../../store/authStore';
 import { formatCurrency } from '../../../utils';
 import LoadingScreen from '../../../components/LoadingScreen';
-import TapToPayIntroModal from '../../../components/TapToPayIntroModal';
-import TapToPayEnablePromptModal from '../../../components/TapToPayEnablePromptModal';
-import {
-  hasSeenTapToPayIntro,
-  markTapToPayIntroSeen,
-  hasSeenTapToPayEnablePrompt,
-  markTapToPayEnablePromptSeen,
-} from '../../../services/tapToPayPrefs';
-import {
-  canAcceptTapToPayTerms,
-  showTapToPayAdminRequiredAlert,
-} from '../../../utils/tapToPayAccess';
+import TapToPayIcon from '../../../components/TapToPayIcon';
+import { canAcceptTapToPayTerms } from '../../../utils/tapToPayAccess';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -59,8 +49,6 @@ export default function AdminDashboardScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [filterText, setFilterText] = useState('');
-  const [showTapToPayIntro, setShowTapToPayIntro] = useState(false);
-  const [showTapToPayEnable, setShowTapToPayEnable] = useState(false);
 
   const showTapToPayFeatures =
     Platform.OS === 'ios' && canAcceptTapToPayTerms(isAdmin, canManageTapToPay);
@@ -79,58 +67,8 @@ export default function AdminDashboardScreen() {
     }, []),
   );
 
-  useFocusEffect(
-    useCallback(() => {
-      if (!showTapToPayFeatures) return;
-
-      let cancelled = false;
-
-      (async () => {
-        const introSeen = await hasSeenTapToPayIntro();
-        if (cancelled) return;
-        if (!introSeen) {
-          setShowTapToPayIntro(true);
-          return;
-        }
-        const enableSeen = await hasSeenTapToPayEnablePrompt();
-        if (cancelled || enableSeen) return;
-        setShowTapToPayEnable(true);
-      })();
-
-      return () => {
-        cancelled = true;
-      };
-    }, [showTapToPayFeatures]),
-  );
-
   const openTapToPaySettings = () => {
     navigation.navigate('AdminTapToPay');
-  };
-
-  const handleIntroGetStarted = async () => {
-    await markTapToPayIntroSeen();
-    setShowTapToPayIntro(false);
-    openTapToPaySettings();
-  };
-
-  const handleIntroDismiss = async () => {
-    await markTapToPayIntroSeen();
-    setShowTapToPayIntro(false);
-    const enableSeen = await hasSeenTapToPayEnablePrompt();
-    if (!enableSeen) {
-      setShowTapToPayEnable(true);
-    }
-  };
-
-  const handleEnableSetUp = async () => {
-    await markTapToPayEnablePromptSeen();
-    setShowTapToPayEnable(false);
-    openTapToPaySettings();
-  };
-
-  const handleEnableLater = async () => {
-    await markTapToPayEnablePromptSeen();
-    setShowTapToPayEnable(false);
   };
 
   const loadData = async () => {
@@ -253,12 +191,9 @@ export default function AdminDashboardScreen() {
             <Card style={styles.tapToPayCard}>
               <Card.Content style={styles.tapToPayCardContent}>
                 <View style={styles.tapToPayCardLeft}>
-                  <IconButton
-                    icon="cellphone-nfc"
-                    iconColor={COLORS.primary}
-                    size={28}
-                    style={styles.tapToPayIcon}
-                  />
+                  <View style={styles.tapToPayIcon}>
+                    <TapToPayIcon size={28} color={COLORS.primary} filled />
+                  </View>
                   <View style={styles.tapToPayTextWrap}>
                     <Text style={styles.tapToPayTitle}>Tap to Pay on iPhone</Text>
                     <Text style={styles.tapToPayDesc}>
@@ -405,16 +340,6 @@ export default function AdminDashboardScreen() {
         disabled={isCreating}
       />
 
-      <TapToPayIntroModal
-        visible={showTapToPayIntro}
-        onGetStarted={handleIntroGetStarted}
-        onDismiss={handleIntroDismiss}
-      />
-      <TapToPayEnablePromptModal
-        visible={showTapToPayEnable && !showTapToPayIntro}
-        onSetUp={handleEnableSetUp}
-        onLater={handleEnableLater}
-      />
     </View>
   );
 }

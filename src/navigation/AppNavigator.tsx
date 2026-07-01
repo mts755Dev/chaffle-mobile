@@ -27,6 +27,7 @@ import InPersonPaymentScreen from '../screens/Admin/InPersonPayment/InPersonPaym
 import AdminTapToPayScreen from '../screens/Admin/TapToPay/AdminTapToPayScreen';
 import TapToPayEducationScreen from '../screens/Admin/TapToPay/TapToPayEducationScreen';
 import PreviewRaffleScreen from '../screens/Admin/PreviewRaffle/PreviewRaffleScreen';
+import TapToPayOnboardingHost from '../components/TapToPayOnboardingHost';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
@@ -186,7 +187,7 @@ export default function AppNavigator() {
         <Stack.Screen
           name="InPersonPayment"
           component={InPersonPaymentScreen}
-          options={{ title: 'In-Person Payment' }}
+          options={{ title: 'Tap to Pay on iPhone' }}
         />
         <Stack.Screen
           name="AdminTapToPay"
@@ -196,9 +197,10 @@ export default function AppNavigator() {
         <Stack.Screen
           name="TapToPayEducation"
           component={TapToPayEducationScreen}
-          options={{ title: 'Tap to Pay Guide' }}
+          options={{ title: 'Tap to Pay on iPhone Guide' }}
         />
       </Stack.Navigator>
+      <TapToPayOnboardingHost />
     </NavigationContainer>
   );
 }

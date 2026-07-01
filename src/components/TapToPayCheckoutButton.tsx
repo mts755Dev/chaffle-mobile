@@ -3,11 +3,12 @@
  */
 
 import React from 'react';
-import { View, StyleSheet, Platform } from 'react-native';
+import { View, StyleSheet } from 'react-native';
 import { Button, Text } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { COLORS } from '../constants';
 import { tapToPayCheckoutButtonLabel } from '../constants/tapToPayCheckout';
+import TapToPayIcon from './TapToPayIcon';
 
 interface TapToPayCheckoutButtonProps {
   amountFormatted: string;
@@ -26,7 +27,9 @@ export default function TapToPayCheckoutButton({
     <View style={[styles.footer, { paddingBottom: Math.max(insets.bottom, 12) }]}>
       <Button
         mode="contained"
-        icon={Platform.OS === 'ios' ? 'contactless-payment' : 'cellphone-nfc'}
+        icon={({ size, color }) => (
+          <TapToPayIcon size={size} color={color} filled />
+        )}
         onPress={onPress}
         loading={loading}
         style={styles.button}

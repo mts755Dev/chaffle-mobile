@@ -6,6 +6,7 @@ import React, {
   useState,
   type ReactNode,
 } from 'react';
+import { setTerminalAccountScope } from '../services/stripeTerminal';
 
 interface StripeTerminalAccountContextValue {
   stripeAccountId: string | undefined;
@@ -39,12 +40,22 @@ export function useStripeTerminalAccount(): StripeTerminalAccountContextValue {
   return ctx;
 }
 
-/** Sets connected-account scope for Terminal tokens while In-Person Payment is open. */
+/**
+ * Sets connected-account scope for Terminal tokens while In-Person Payment is open.
+ * The module-level scope is updated synchronously during render so the tokenProvider
+ * closure always reads the correct account before any effects (autoConnect) fire.
+ */
 export function useStripeTerminalAccountScope(stripeAccountId: string | undefined) {
   const { setStripeAccountId } = useStripeTerminalAccount();
 
+  setTerminalAccountScope(stripeAccountId);
+
   useEffect(() => {
     setStripeAccountId(stripeAccountId);
-    return () => setStripeAccountId(undefined);
+    setTerminalAccountScope(stripeAccountId);
+    return () => {
+      setStripeAccountId(undefined);
+      setTerminalAccountScope(undefined);
+    };
   }, [stripeAccountId, setStripeAccountId]);
 }

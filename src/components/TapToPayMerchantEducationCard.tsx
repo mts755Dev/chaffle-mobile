@@ -1,9 +1,10 @@
 /**
- * Merchant education entry points (4.3) on Tap to Pay settings.
+ * Merchant education entry points (4.2) on Tap to Pay settings.
+ * Apple ProximityReaderDiscovery is the primary, marketing-compliant path.
  */
 
 import React from 'react';
-import { View, StyleSheet } from 'react-native';
+import { StyleSheet } from 'react-native';
 import { Text, Button, Card, Divider } from 'react-native-paper';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -30,36 +31,41 @@ export default function TapToPayMerchantEducationCard({
       <Card.Content>
         <Text style={styles.title}>Merchant education</Text>
         <Text style={styles.desc}>
-          Learn how to accept contactless cards, Apple Pay, and digital wallets with Tap to Pay on iPhone.
+          Apple&apos;s official tutorial shows how to accept contactless cards, Apple Pay, and
+          digital wallets. It appears automatically after you accept Terms &amp; Conditions and
+          complete setup.
         </Text>
 
-        {appleAvailable && (
+        <Button
+          mode="contained"
+          icon="book-open-variant"
+          onPress={onPresentAppleEducation}
+          disabled={!appleAvailable}
+          style={styles.btn}
+          buttonColor={COLORS.primary}
+        >
+          View Apple Tap to Pay on iPhone Tutorial
+        </Button>
+
+        <Text style={styles.hint}>
+          {appleAvailable
+            ? 'Apple-provided, localized content (iOS 18+). Required for App Review.'
+            : 'Requires iOS 18+ and a current development build with ProximityReaderDiscovery.'}
+        </Text>
+
+        {!appleAvailable && (
           <>
+            <Divider style={styles.divider} />
             <Button
-              mode="contained"
-              icon="book-open-variant"
-              onPress={onPresentAppleEducation}
+              mode="outlined"
+              icon="help-circle-outline"
+              onPress={() => navigation.navigate('TapToPayEducation')}
               style={styles.btn}
-              buttonColor={COLORS.primary}
             >
-              View Apple Tap to Pay Tutorial
+              Open Reference Guide (fallback)
             </Button>
-            <Text style={styles.hint}>
-              Recommended on iOS 18+ — Apple-provided, localized content.
-            </Text>
           </>
         )}
-
-        <Divider style={styles.divider} />
-
-        <Button
-          mode="outlined"
-          icon="help-circle-outline"
-          onPress={() => navigation.navigate('TapToPayEducation')}
-          style={styles.btn}
-        >
-          Open Merchant Guide (Help)
-        </Button>
 
         {educationStatus && (
           <Text style={styles.status}>{educationStatus}</Text>

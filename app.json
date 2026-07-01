@@ -3,7 +3,7 @@
     "name": "Chaffle",
     "slug": "chaffle",
     "scheme": "chaffle",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "platforms": [
       "ios",
@@ -17,7 +17,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.chaffleorg.chaffle",
-      "buildNumber": "22",
+      "buildNumber": "3",
       "entitlements": {
         "com.apple.developer.proximity-reader.payment.acceptance": true
       },
@@ -25,7 +25,30 @@
         "NSLocationWhenInUseUsageDescription": "Chaffle needs your location to verify raffle eligibility in your state.",
         "NSCameraUsageDescription": "Chaffle needs camera access to scan QR codes.",
         "ITSAppUsesNonExemptEncryption": false,
-        "CFBundleLocalizations": ["en"]
+        "CFBundleLocalizations": [
+          "en",
+          "fr",
+          "de",
+          "es",
+          "it",
+          "pt",
+          "ja",
+          "ko",
+          "zh-Hans",
+          "zh-Hant",
+          "ar",
+          "nl",
+          "pl",
+          "sv",
+          "da",
+          "fi",
+          "nb",
+          "th",
+          "vi",
+          "id",
+          "tr",
+          "ru"
+        ]
       }
     },
     "android": {
@@ -75,7 +98,7 @@
         "expo-build-properties",
         {
           "ios": {
-            "deploymentTarget": "15.1"
+            "deploymentTarget": "18.0"
           },
           "android": {
             "minSdkVersion": 26
@@ -83,7 +106,8 @@
         }
       ],
       "expo-font",
-      "expo-secure-store"
+      "expo-secure-store",
+      "./plugins/withProximityReaderDiscoveryFix.js"
     ],
     "extra": {
       "eas": {

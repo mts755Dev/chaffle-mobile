@@ -40,7 +40,7 @@ export function classifyTerminalPaymentError(
     return {
       outcome: 'declined',
       message:
-        'Payment could not be loaded for this raffle\'s Stripe account. Disconnect Tap to Pay (or leave and re-open In-Person Payment), wait until it shows Ready, then try again.',
+        'Payment could not be loaded for this raffle\'s Stripe account. Disconnect Tap to Pay on iPhone (or leave and re-open this screen), wait until it shows Ready, then try again.',
     };
   }
 

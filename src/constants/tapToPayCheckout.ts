@@ -4,7 +4,7 @@ export function tapToPayCheckoutButtonLabel(amountFormatted: string): string {
   return `Tap to Pay on iPhone · ${amountFormatted}`;
 }
 
-export const TAP_TO_PAY_INITIALIZING_TITLE = 'Initializing Tap to Pay…';
+export const TAP_TO_PAY_INITIALIZING_TITLE = 'Initializing Tap to Pay on iPhone…';
 export const TAP_TO_PAY_INITIALIZING_SUBTITLE =
   'Tap to Pay on iPhone will be available shortly.';
 

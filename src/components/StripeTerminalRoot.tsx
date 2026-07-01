@@ -2,21 +2,24 @@
  * Single app-wide Stripe Terminal provider (iOS) for warm-up + In-Person Payment.
  */
 
-import React, { type ReactNode } from 'react';
+import React, { useCallback, type ReactNode } from 'react';
 import { Platform } from 'react-native';
 import { StripeTerminalProvider } from '@stripe/stripe-terminal-react-native';
-import { StripeTerminalAccountProvider, useStripeTerminalAccount } from '../contexts/StripeTerminalAccountContext';
-import { fetchConnectionToken } from '../services/stripeTerminal';
+import { StripeTerminalAccountProvider } from '../contexts/StripeTerminalAccountContext';
+import { fetchConnectionToken, getTerminalAccountScope } from '../services/stripeTerminal';
 import TapToPayWarmup from './TapToPayWarmup';
 import TapToPayPostTermsEducation from './TapToPayPostTermsEducation';
 
 function StripeTerminalProviderInner({ children }: { children: ReactNode }) {
-  const { stripeAccountId } = useStripeTerminalAccount();
+  const stableTokenProvider = useCallback(
+    () => fetchConnectionToken(getTerminalAccountScope()),
+    [],
+  );
 
   return (
     <StripeTerminalProvider
       logLevel={__DEV__ ? 'verbose' : 'none'}
-      tokenProvider={() => fetchConnectionToken(stripeAccountId)}
+      tokenProvider={stableTokenProvider}
     >
       <>
         <TapToPayWarmup />

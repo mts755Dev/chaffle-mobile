@@ -98,3 +98,8 @@ export async function getPublicIp(): Promise<string> {
     return '0.0.0.0';
   }
 }
+
+/** First UUID segment, uppercase — matches web getTicketReferenceId. */
+export function getTicketReferenceId(ticketId: string): string {
+  return ticketId.split('-')[0].toUpperCase();
+}

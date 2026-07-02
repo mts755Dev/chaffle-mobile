@@ -27,7 +27,10 @@ import { useAuthStore } from '../../../store/authStore';
 import { formatCurrency } from '../../../utils';
 import LoadingScreen from '../../../components/LoadingScreen';
 import TapToPayIcon from '../../../components/TapToPayIcon';
-import { canAcceptTapToPayTerms } from '../../../utils/tapToPayAccess';
+import {
+  canAcceptTapToPayTerms,
+  showTapToPayAdminRequiredAlert,
+} from '../../../utils/tapToPayAccess';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -68,7 +71,7 @@ export default function AdminDashboardScreen() {
   );
 
   const openTapToPaySettings = () => {
-    navigation.navigate('AdminTapToPay');
+    navigation.navigate('AdminTapToPay', {});
   };
 
   const loadData = async () => {

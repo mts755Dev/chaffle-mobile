@@ -411,10 +411,12 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
 
               {/* Platform fee checkbox */}
               <View style={styles.feeRow}>
-                <Checkbox
+                <Checkbox.Android
                   status={platformFee ? 'checked' : 'unchecked'}
                   onPress={() => setPlatformFee(!platformFee)}
                   color={COLORS.primary}
+                  uncheckedColor={COLORS.textSecondary}
+                  disabled={!isConnected}
                 />
                 <Text style={styles.feeLabel}>
                   Help support our platform by donating 10%

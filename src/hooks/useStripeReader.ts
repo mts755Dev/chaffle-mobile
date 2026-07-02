@@ -116,6 +116,15 @@ function resolveMerchantDisplayName(name?: string, fallback = 'Chaffle'): string
   return fallback;
 }
 
+/** True when the SDK connection token scope matches what this screen requires. */
+function isTerminalSessionScopeReady(expectedStripeAccount: string | undefined): boolean {
+  const sessionScope = getSdkSessionScope();
+  if (expectedStripeAccount) {
+    return sessionScope === expectedStripeAccount;
+  }
+  return sessionScope === undefined;
+}
+
 export function useStripeReader(options: UseStripeReaderOptions = {}) {
   const { stripeAccount, merchantDisplayName } = options;
   const terminalMerchantName = resolveMerchantDisplayName(
@@ -349,24 +358,22 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
       return;
     }
 
-    const sdkMayBeConnected =
-      globalScope !== undefined ||
-      connectionStatusRef.current === 'connected' ||
-      connectionStatusRef.current === 'connecting' ||
-      connectInProgressRef.current;
-
-    if (!localScopeMatches || !globalScopeMatches) {
-      if (sdkMayBeConnected) {
-        terminalLog.connection(
-          `Stripe account scope mismatch (local: ${connectedStripeAccountRef.current ?? 'platform'}, ` +
-          `global: ${globalScope ?? 'platform'} → target: ${targetAccount ?? 'platform'}), resetting Terminal session…`,
-        );
-        try { await cancelDiscovering(); } catch { /* ignore */ }
-        try { await sdkDisconnectReader(); } catch { /* ignore */ }
-        try { await sdkClearCachedCredentials(); } catch { /* ignore */ }
-        resetTerminalConnectionState();
-      }
+    if (
+      connectInProgressRef.current ||
+      autoConnectingRef.current ||
+      setupFlowActiveRef.current
+    ) {
+      return;
     }
+
+    terminalLog.connection(
+      `Stripe account scope mismatch (local: ${connectedStripeAccountRef.current ?? 'platform'}, ` +
+        `global: ${globalScope ?? 'platform'} → target: ${targetAccount ?? 'platform'}), resetting Terminal session…`,
+    );
+    try { await cancelDiscovering(); } catch { /* ignore */ }
+    try { await sdkDisconnectReader(); } catch { /* ignore */ }
+    try { await sdkClearCachedCredentials(); } catch { /* ignore */ }
+    resetTerminalConnectionState();
   }, [
     stripeAccount,
     cancelDiscovering,
@@ -421,10 +428,10 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
     try {
       const readerResult = await sdkGetConnectedReader();
       if (isConnectedReaderPayload(readerResult)) {
-        const globalScope = getSdkSessionScope();
-        if (globalScope !== undefined && globalScope !== stripeAccount) {
+        if (!isTerminalSessionScopeReady(stripeAccount)) {
           terminalLog.connection(
-            `SDK connected on ${globalScope ?? 'platform'} but this screen needs ${stripeAccount ?? 'platform'} — not accepting stale connection`,
+            `SDK session is ${getSdkSessionScope() ?? 'platform'} but this screen needs ` +
+              `${stripeAccount ?? 'platform'} — not accepting stale connection`,
           );
           return false;
         }
@@ -444,10 +451,10 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
       if (sdkStatus === 'connected') {
         const retryReader = await sdkGetConnectedReader();
         if (isConnectedReaderPayload(retryReader)) {
-          const globalScope = getSdkSessionScope();
-          if (globalScope !== undefined && globalScope !== stripeAccount) {
+          if (!isTerminalSessionScopeReady(stripeAccount)) {
             terminalLog.connection(
-              `SDK connected on ${globalScope ?? 'platform'} but this screen needs ${stripeAccount ?? 'platform'} — not accepting stale connection`,
+              `SDK session is ${getSdkSessionScope() ?? 'platform'} but this screen needs ` +
+                `${stripeAccount ?? 'platform'} — not accepting stale connection`,
             );
             return false;
           }
@@ -682,14 +689,17 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
       connectedMerchantDisplayNameRef.current != null &&
       connectedMerchantDisplayNameRef.current !== terminalMerchantName;
 
-    if (wrongMerchantLabel && (connectedReader || connectionStatus === 'connected')) {
+    const scopeReady = isTerminalSessionScopeReady(stripeAccount);
+    const sdkConnected = connectionStatusRef.current === 'connected';
+
+    if (wrongMerchantLabel && scopeReady && sdkConnected) {
       terminalLog.connection(
         `Reconnecting Tap to Pay for merchant "${terminalMerchantName}"…`,
       );
       try { await sdkDisconnectReader(); } catch { /* ignore */ }
       resetTerminalConnectionState();
-    } else if (connectedReader || connectionStatus === 'connected') {
-      terminalLog.connection('Already connected — skipping auto-connect');
+    } else if (scopeReady && sdkConnected) {
+      terminalLog.connection('Already connected on correct Stripe scope — skipping auto-connect');
       return;
     }
 
@@ -732,7 +742,25 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
       });
 
       if (error && isAlreadyConnectedError(error)) {
-        await syncConnectionFromSdk();
+        if (await syncConnectionFromSdk()) {
+          return;
+        }
+        terminalLog.connection(
+          'Tap to Pay still connected on wrong Stripe scope — forcing disconnect…',
+        );
+        try { await sdkDisconnectReader(); } catch { /* ignore */ }
+        try { await sdkClearCachedCredentials(); } catch { /* ignore */ }
+        resetTerminalConnectionState();
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        const { error: retryError } = await sdkDiscoverReaders({
+          discoveryMethod: 'tapToPay',
+          simulated: STRIPE_TERMINAL_SIMULATED,
+        });
+        if (retryError && !isBenignDiscoveryError(retryError)) {
+          throw new Error(
+            formatTerminalErrorMessage(retryError, 'Failed to discover Tap to Pay on iPhone reader'),
+          );
+        }
         return;
       }
 
@@ -740,9 +768,16 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
         throw new Error(formatTerminalErrorMessage(error, 'Failed to discover Tap to Pay on iPhone reader'));
       }
     } catch (err: any) {
-      if (err.message?.toLowerCase().includes('canceled') ||
-          err.message?.toLowerCase().includes('already connected')) {
-        await syncConnectionFromSdk();
+      if (err.message?.toLowerCase().includes('canceled')) {
+        return;
+      }
+      if (err.message?.toLowerCase().includes('already connected')) {
+        if (await syncConnectionFromSdk()) {
+          return;
+        }
+        try { await sdkDisconnectReader(); } catch { /* ignore */ }
+        try { await sdkClearCachedCredentials(); } catch { /* ignore */ }
+        resetTerminalConnectionState();
         return;
       }
       autoConnectingRef.current = false;
@@ -818,7 +853,11 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
     async (timeoutMs: number = CONNECT_TIMEOUT_MS): Promise<boolean> => {
       const deadline = Date.now() + timeoutMs;
       while (Date.now() < deadline) {
-        if (connectionStatusRef.current === 'connected') {
+        if (
+          connectionStatusRef.current === 'connected' &&
+          isTerminalSessionScopeReady(stripeAccount) &&
+          connectedStripeAccountRef.current === stripeAccount
+        ) {
           return true;
         }
         await syncConnectionFromSdk();
@@ -826,7 +865,7 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
       }
       return false;
     },
-    [syncConnectionFromSdk],
+    [syncConnectionFromSdk, stripeAccount],
   );
 
   // ── Payment Flow ───────────────────────────────────────────────────
@@ -849,10 +888,9 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
         throw new Error('Tap to Pay on iPhone is not ready. Please wait for connection.');
       }
 
-      const globalScope = getSdkSessionScope();
       if (
         connectedStripeAccountRef.current !== stripeAccount ||
-        (globalScope !== undefined && globalScope !== stripeAccount)
+        !isTerminalSessionScopeReady(stripeAccount)
       ) {
         throw new Error(
           'Tap to Pay on iPhone session does not match this raffle\'s Stripe account. ' +
@@ -950,14 +988,17 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
     ): Promise<TerminalPaymentResult> => {
       await reconcileStripeAccountScope();
 
-      if (connectionStatusRef.current !== 'connected') {
+      const readerScopeReady =
+        connectionStatusRef.current === 'connected' &&
+        isTerminalSessionScopeReady(stripeAccount) &&
+        connectedStripeAccountRef.current === stripeAccount;
+
+      if (!readerScopeReady) {
         setPaymentStatus('initializing');
         setPaymentError(null);
         setPaymentOutcome(null);
 
-        if (connectionStatusRef.current === 'not_connected') {
-          await autoConnect();
-        }
+        await autoConnect();
 
         const ready = await waitForReaderReady();
         if (!ready) {

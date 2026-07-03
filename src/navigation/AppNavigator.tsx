@@ -19,6 +19,7 @@ import GeoRestrictedScreen from '../components/GeoRestrictedScreen';
 
 // Admin Screens
 import AdminLoginScreen from '../screens/Admin/AdminLoginScreen';
+import AdminSignupScreen from '../screens/Admin/AdminSignupScreen';
 import AdminDashboardScreen from '../screens/Admin/Dashboard/AdminDashboardScreen';
 import EditRaffleScreen from '../screens/Admin/EditRaffle/EditRaffleScreen';
 import AdminTicketsScreen from '../screens/Admin/Tickets/AdminTicketsScreen';
@@ -28,6 +29,9 @@ import AdminTapToPayScreen from '../screens/Admin/TapToPay/AdminTapToPayScreen';
 import TapToPayEducationScreen from '../screens/Admin/TapToPay/TapToPayEducationScreen';
 import PreviewRaffleScreen from '../screens/Admin/PreviewRaffle/PreviewRaffleScreen';
 import TapToPayOnboardingHost from '../components/TapToPayOnboardingHost';
+import ManageWorkersScreen from '../screens/Admin/Workers/ManageWorkersScreen';
+import WorkerDashboardScreen from '../screens/Worker/WorkerDashboardScreen';
+import WorkerTicketsScreen from '../screens/Worker/WorkerTicketsScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 const Tab = createBottomTabNavigator<MainTabParamList>();
@@ -104,7 +108,7 @@ function MainTabs() {
         name="AdminLogin"
         component={AdminLoginScreen}
         options={{
-          title: 'Admin',
+          title: 'Sign In',
           tabBarIcon: ({ color, size }) => (
             <Icon source="shield-account" size={size} color={color} />
           ),
@@ -160,6 +164,11 @@ export default function AppNavigator() {
         />
         {/* Admin Screens */}
         <Stack.Screen
+          name="AdminSignup"
+          component={AdminSignupScreen}
+          options={{ title: 'Organization Signup' }}
+        />
+        <Stack.Screen
           name="AdminDashboard"
           component={AdminDashboardScreen}
           options={{ title: 'Admin Dashboard' }}
@@ -198,6 +207,24 @@ export default function AppNavigator() {
           name="TapToPayEducation"
           component={TapToPayEducationScreen}
           options={{ title: 'Tap to Pay on iPhone Guide' }}
+        />
+        <Stack.Screen
+          name="ManageWorkers"
+          component={ManageWorkersScreen}
+          options={{ title: 'Manage Workers' }}
+        />
+        <Stack.Screen
+          name="WorkerDashboard"
+          component={WorkerDashboardScreen}
+          options={{
+            title: 'Worker Dashboard',
+            headerBackVisible: false,
+          }}
+        />
+        <Stack.Screen
+          name="WorkerTickets"
+          component={WorkerTicketsScreen}
+          options={{ title: 'Tickets' }}
         />
       </Stack.Navigator>
       <TapToPayOnboardingHost />

@@ -1087,7 +1087,7 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
         await stripeApi.createTerminalOnboardingLink({
           stripeAccount,
           allowRelinking: true,
-          merchantDisplayName: 'Chaffle',
+          merchantDisplayName: terminalMerchantName,
         });
       } catch (relinkErr: unknown) {
         terminalLog.error('Relink prep failed (continuing with connect)', relinkErr);
@@ -1111,7 +1111,7 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
           locationId,
           simulated: STRIPE_TERMINAL_SIMULATED,
           tosAcceptancePermitted: true,
-          merchantDisplayName: 'Chaffle',
+          merchantDisplayName: terminalMerchantName,
           autoReconnectOnUnexpectedDisconnect: true,
         }),
         CONNECT_TIMEOUT_MS,
@@ -1151,6 +1151,7 @@ export function useStripeReader(options: UseStripeReaderOptions = {}) {
     sdkEasyConnect,
     stripeAccount,
     applyConnectedReader,
+    terminalMerchantName,
   ]);
 
   /** Sync SDK state first; only disconnect/reconnect when Tap to Pay is not already active. */

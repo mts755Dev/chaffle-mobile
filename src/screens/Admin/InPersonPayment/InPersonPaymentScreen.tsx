@@ -22,9 +22,12 @@ import { useRoute, RouteProp, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useStripeTerminalAccountScope } from '../../../contexts/StripeTerminalAccountContext';
 import { useAuthStore } from '../../../store/authStore';
+import { blockWorkerFromForeignRaffle } from '../../../utils/workerAccess';
 import {
-  canAcceptTapToPayTerms,
-  showTapToPayAdminRequiredAlert,
+  canUseInPersonPayment,
+  isOrgTapToPayReady,
+  showOrgStripeRequiredAlert,
+  usesOrganizationStripe,
 } from '../../../utils/tapToPayAccess';
 import { COLORS, TICKET_TIERS } from '../../../constants';
 import { RootStackParamList, DonationForm } from '../../../types';
@@ -52,12 +55,24 @@ export default function InPersonPaymentScreen() {
   const route = useRoute<InPersonPaymentRouteProp>();
   const navigation = useNavigation<NavigationProp>();
   const { id } = route.params;
+  const { role, raffleId: workerRaffleId } = useAuthStore();
 
   const [raffle, setRaffle] = useState<DonationForm | null>(null);
   const [isLoadingRaffle, setIsLoadingRaffle] = useState(true);
   const [loadError, setLoadError] = useState<string | null>(null);
+  const [workerBlocked, setWorkerBlocked] = useState(false);
 
   const loadRaffle = useCallback(async () => {
+    if (
+      !blockWorkerFromForeignRaffle(role, workerRaffleId, id, () =>
+        navigation.goBack(),
+      )
+    ) {
+      setWorkerBlocked(true);
+      setIsLoadingRaffle(false);
+      return;
+    }
+
     setIsLoadingRaffle(true);
     setLoadError(null);
     try {
@@ -75,10 +90,11 @@ export default function InPersonPaymentScreen() {
     } finally {
       setIsLoadingRaffle(false);
     }
-  }, [id, navigation]);
+  }, [id, navigation, role, workerRaffleId]);
 
   useEffect(() => { loadRaffle(); }, [loadRaffle]);
 
+  if (workerBlocked) return null;
   if (isLoadingRaffle) return <LoadingScreen message="Loading raffle…" />;
   if (loadError) return <ErrorScreen message={loadError} onRetry={loadRaffle} />;
   if (!raffle) return <ErrorScreen message="Raffle not found" />;
@@ -90,30 +106,46 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
   const route = useRoute<InPersonPaymentRouteProp>();
   const navigation = useNavigation<NavigationProp>();
   const { id } = route.params;
-  const { isAdmin, canManageTapToPay } = useAuthStore();
+  const { isAdmin, role, orgStripeConnected, orgStripeAccountId } = useAuthStore();
 
   const stripeAccountId = (raffle.stripeAccount as any)?.id as string | undefined;
   const merchantDisplayName = raffle.title?.trim() || 'Raffle';
   useStripeTerminalAccountScope(stripeAccountId);
 
+  const orgStripeReady = isOrgTapToPayReady(
+    role,
+    orgStripeConnected,
+    orgStripeAccountId,
+  );
+  const isOrgScoped = usesOrganizationStripe(role);
+
   useEffect(() => {
+    if (isOrgScoped && !orgStripeReady) {
+      showOrgStripeRequiredAlert(() => navigation.goBack(), role);
+      return;
+    }
     if (!stripeAccountId) {
       Alert.alert(
         'Stripe required',
-        'This raffle does not have Stripe connected. Link Stripe on the raffle before using Tap to Pay on iPhone.',
+        isOrgScoped
+          ? 'Your organization does not have Stripe connected yet. Ask your organization admin to connect Stripe before using Tap to Pay on iPhone.'
+          : 'This raffle does not have Stripe connected. Link Stripe on the raffle before using Tap to Pay on iPhone.',
         [{ text: 'OK', onPress: () => navigation.goBack() }],
       );
     }
-  }, [stripeAccountId, navigation]);
+  }, [stripeAccountId, isOrgScoped, orgStripeReady, navigation]);
 
   useEffect(() => {
-    if (!canAcceptTapToPayTerms(isAdmin, canManageTapToPay)) {
-      showTapToPayAdminRequiredAlert();
+    if (!canUseInPersonPayment(isAdmin, role, orgStripeConnected, orgStripeAccountId)) {
       navigation.goBack();
     }
-  }, [isAdmin, canManageTapToPay, navigation]);
+  }, [isAdmin, role, orgStripeConnected, orgStripeAccountId, navigation]);
 
-  if (!canAcceptTapToPayTerms(isAdmin, canManageTapToPay)) {
+  if (!canUseInPersonPayment(isAdmin, role, orgStripeConnected, orgStripeAccountId)) {
+    return null;
+  }
+
+  if ((isOrgScoped && !orgStripeReady) || !stripeAccountId) {
     return null;
   }
 
@@ -299,42 +331,47 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
       >
         {/* ── Header ──────────────────────────────────────────────── */}
         <View style={styles.header}>
-          <Text style={styles.heading}>Tap to Pay on iPhone</Text>
-          <Text style={styles.subtitle}>
-            Accept card payments using Tap to Pay on iPhone
-          </Text>
-          <Text style={styles.raffleName}>
-            Raffle: {raffle.title || 'Untitled Raffle'}
-          </Text>
+          <Text style={styles.heading} children="Tap to Pay on iPhone" />
+          <Text style={styles.subtitle} children="Accept card payments using Tap to Pay on iPhone" />
+          <Text
+            style={styles.raffleName}
+            children={`Raffle: ${raffle.title || 'Untitled Raffle'}`}
+          />
         </View>
 
         {/* ── Tap to Pay Connection Status ─────────────────────────── */}
-        <Card style={styles.readerCard}>
-          <Card.Content>
-            <ReaderConnectionStatus
-              status={connectionStatus}
-              reader={connectedReader}
-              onDisconnect={disconnectReader}
-              updateProgress={readerUpdateProgress}
-            />
+        <Card
+          style={styles.readerCard}
+          children={
+            <Card.Content
+              children={
+                <>
+                  <ReaderConnectionStatus
+                    status={connectionStatus}
+                    reader={connectedReader}
+                    onDisconnect={disconnectReader}
+                    updateProgress={readerUpdateProgress}
+                  />
 
-            {!isConnected && connectionStatus !== 'connecting' && (
-              <>
-                <Divider style={styles.readerDivider} />
-                <Button
-                  mode="outlined"
-                  icon={({ size, color }) => (
-                    <TapToPayIcon size={size} color={color} />
+                  {!isConnected && connectionStatus !== 'connecting' && (
+                    <>
+                      <Divider style={styles.readerDivider} />
+                      <Button
+                        mode="outlined"
+                        icon={({ size, color }) => (
+                          <TapToPayIcon size={size} color={color} />
+                        )}
+                        onPress={autoConnect}
+                        style={{ borderColor: COLORS.border, borderRadius: 8 }}
+                        children="Reconnect Tap to Pay on iPhone"
+                      />
+                    </>
                   )}
-                  onPress={autoConnect}
-                  style={{ borderColor: COLORS.border, borderRadius: 8 }}
-                >
-                  Reconnect Tap to Pay on iPhone
-                </Button>
-              </>
-            )}
-          </Card.Content>
-        </Card>
+                </>
+              }
+            />
+          }
+        />
 
         {/* ── Payment Status Overlay ──────────────────────────────── */}
         {paymentActive && (

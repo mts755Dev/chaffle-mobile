@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   StyleSheet,
@@ -12,7 +12,8 @@ import QRCode from 'react-native-qrcode-svg';
 import { COLORS, API_BASE_URL } from '../../constants';
 import { RootStackParamList, DonationForm, TicketTotalByRaffle, Ticket } from '../../types';
 import { raffleApi, ticketApi } from '../../services/api/raffleApi';
-import { formatCurrency, calculatePot, formatDate } from '../../utils';
+import { drawApi } from '../../services/api/drawApi';
+import { formatCurrency, calculatePot, formatDate, getTicketReferenceId } from '../../utils';
 import { useLocation } from '../../hooks/useLocation';
 import CountdownTimer from '../../components/CountdownTimer';
 import HtmlContent from '../../components/HtmlContent';
@@ -36,6 +37,16 @@ export default function RaffleScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showQR, setShowQR] = useState(false);
+  const autoDrawTriggered = useRef(false);
+
+  const refreshWinner = useCallback(async (raffleId: string) => {
+    const winner = await ticketApi.getTicketWhere({
+      donation_formId: raffleId,
+      isWinner: true,
+    } as any);
+    setWinnerTicket(winner);
+    return winner;
+  }, []);
 
   useEffect(() => {
     loadRaffle();
@@ -58,19 +69,31 @@ export default function RaffleScreen() {
       const totals = await raffleApi.getTicketsAmountByRaffle(id);
       if (totals.length > 0) setTicketTotal(totals[0]);
 
-      if (form.draw_date && new Date(form.draw_date) < new Date()) {
-        const winner = await ticketApi.getTicketWhere({
-          donation_formId: id,
-          isWinner: true,
-        } as any);
-        if (winner) setWinnerTicket(winner);
+      // Auto-draw when draw_date has passed — mirrors web public raffle page
+      try {
+        await drawApi.triggerAutoDrawIfDue(id);
+      } catch {
+        // Non-fatal: page still loads if auto-draw fails
       }
+      await refreshWinner(id);
     } catch (err: any) {
       setError(err.message || 'Failed to load raffle');
     } finally {
       setIsLoading(false);
     }
   };
+
+  const handleCountdownComplete = useCallback(async () => {
+    if (winnerTicket || autoDrawTriggered.current) return;
+
+    autoDrawTriggered.current = true;
+    try {
+      await drawApi.triggerAutoDrawIfDue(id);
+      await refreshWinner(id);
+    } catch {
+      autoDrawTriggered.current = false;
+    }
+  }, [id, refreshWinner, winnerTicket]);
 
   const handleShare = async () => {
     try {
@@ -168,14 +191,17 @@ export default function RaffleScreen() {
           {winnerTicket ? (
             <>
               <Text style={styles.ticketInfoValue}>
-                #{winnerTicket.id.slice(0, 8).toUpperCase()}
+                #{getTicketReferenceId(winnerTicket.id)}
               </Text>
               <Text style={styles.ticketInfoSmall}>Winner Ticket</Text>
             </>
           ) : !isExpired ? (
             <>
               <Text style={styles.ticketInfoSmall}>Hurry there's still time</Text>
-              <CountdownTimer targetDate={donationForm.draw_date} />
+              <CountdownTimer
+                targetDate={donationForm.draw_date}
+                onExpired={handleCountdownComplete}
+              />
               <Text style={styles.ticketInfoSmall}>Time until raffle</Text>
             </>
           ) : (

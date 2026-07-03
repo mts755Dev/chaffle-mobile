@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   View,
   StyleSheet,
@@ -28,13 +28,18 @@ import {
   TicketTotalByRaffle,
   Ticket,
 } from '../../../types';
+import { drawApi } from '../../../services/api/drawApi';
 import { raffleApi, ticketApi } from '../../../services/api/raffleApi';
+import { useAuthStore } from '../../../store/authStore';
+import { blockWorkerFromForeignRaffle } from '../../../utils/workerAccess';
+import { canManualDrawRaffle } from '../../../utils/drawAccess';
 import {
   formatCurrency,
   calculatePot,
   formatDate,
   stripHtml,
   resolveImageUrl,
+  getTicketReferenceId,
 } from '../../../utils';
 import CountdownTimer from '../../../components/CountdownTimer';
 import HtmlContent from '../../../components/HtmlContent';
@@ -56,18 +61,36 @@ export default function PreviewRaffleScreen() {
   const route = useRoute<PreviewRaffleRouteProp>();
   const { id } = route.params;
 
+  const { role, raffleId: workerRaffleId } = useAuthStore();
+  const autoDrawTriggered = useRef(false);
+
   const [donationForm, setDonationForm] = useState<DonationForm | null>(null);
   const [ticketTotal, setTicketTotal] = useState<TicketTotalByRaffle | null>(null);
   const [winnerTicket, setWinnerTicket] = useState<Ticket | null>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const [isDrawing, setIsDrawing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showQR, setShowQR] = useState(false);
 
-  useEffect(() => {
-    loadRaffle();
-  }, [id]);
+  const refreshWinner = useCallback(async (raffleId: string) => {
+    const winner = await ticketApi.getTicketWhere({
+      donation_formId: raffleId,
+      isWinner: true,
+    } as any);
+    setWinnerTicket(winner);
+    return winner;
+  }, []);
 
-  const loadRaffle = async () => {
+  const loadRaffle = useCallback(async () => {
+    if (
+      !blockWorkerFromForeignRaffle(role, workerRaffleId, id, () =>
+        navigation.goBack(),
+      )
+    ) {
+      setIsLoading(false);
+      return;
+    }
+
     setIsLoading(true);
     setError(null);
     try {
@@ -82,19 +105,63 @@ export default function PreviewRaffleScreen() {
       const totals = await raffleApi.getTicketsAmountByRaffle(id);
       if (totals.length > 0) setTicketTotal(totals[0]);
 
-      // Check for winner if draw date has passed — mirrors web's preview page logic
-      if (form.draw_date && new Date(form.draw_date) < new Date()) {
-        const winner = await ticketApi.getTicketWhere({
-          donation_formId: id,
-          isWinner: true,
-        } as any);
-        if (winner) setWinnerTicket(winner);
+      // Auto-draw on load when due — mirrors web admin preview page
+      try {
+        await drawApi.triggerAutoDrawIfDue(id);
+      } catch {
+        // Non-fatal: page still loads if auto-draw fails
       }
+      await refreshWinner(id);
     } catch (err: any) {
       setError(err.message || 'Failed to load raffle');
     } finally {
       setIsLoading(false);
     }
+  }, [id, role, workerRaffleId, navigation, refreshWinner]);
+
+  useEffect(() => {
+    void loadRaffle();
+  }, [loadRaffle]);
+
+  const handleCountdownComplete = useCallback(async () => {
+    if (winnerTicket || autoDrawTriggered.current) return;
+
+    autoDrawTriggered.current = true;
+    try {
+      await drawApi.triggerAutoDrawIfDue(id);
+      await refreshWinner(id);
+    } catch {
+      autoDrawTriggered.current = false;
+    }
+  }, [id, refreshWinner, winnerTicket]);
+
+  const handleDrawWinner = () => {
+    Alert.alert(
+      'Get a Winner',
+      'Are you sure you want to randomly select a winner? This action cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Get a Winner',
+          style: 'destructive',
+          onPress: async () => {
+            setIsDrawing(true);
+            try {
+              const result = await drawApi.drawWinner(id);
+              setWinnerTicket(result.winnerTicket);
+              Alert.alert(
+                'Winner Selected!',
+                `Reference #${getTicketReferenceId(result.winnerTicket.id)} — ${result.winnerTicket.buyerEmail} (${result.totalEntries} entries, rolled ${result.randomValue})`
+              );
+            } catch (err: any) {
+              Alert.alert('Error', err.message || 'Failed to draw winner');
+            } finally {
+              setIsDrawing(false);
+            }
+          },
+        },
+      ],
+    );
   };
 
   const handleShare = async () => {
@@ -124,6 +191,7 @@ export default function PreviewRaffleScreen() {
     : false;
   const stripeAccountId = (donationForm.stripeAccount as any)?.id;
   const hasStripe = !!stripeAccountId;
+  const showManualDrawButton = !winnerTicket && canManualDrawRaffle(role);
 
   /* ---------------------------------------------------------------- */
   /*  Render                                                          */
@@ -277,7 +345,7 @@ export default function PreviewRaffleScreen() {
                 <Icon source="party-popper" size={28} color={COLORS.white} />
                 <Text style={styles.tileLabelTop}>Winner</Text>
                 <Text style={styles.tileValue}>
-                  #{winnerTicket.id.slice(0, 8).toUpperCase()}
+                  #{getTicketReferenceId(winnerTicket.id)}
                 </Text>
                 <Text style={styles.tileSublabel}>Winner Ticket</Text>
               </>
@@ -285,7 +353,10 @@ export default function PreviewRaffleScreen() {
               <>
                 <Icon source="clock-outline" size={28} color={COLORS.white} />
                 <Text style={styles.tileLabelTop}>Time Left</Text>
-                <CountdownTimer targetDate={donationForm.draw_date} />
+                <CountdownTimer
+                  targetDate={donationForm.draw_date}
+                  onExpired={handleCountdownComplete}
+                />
               </>
             ) : (
               <>
@@ -321,6 +392,25 @@ export default function PreviewRaffleScreen() {
               labelStyle={styles.winnerButtonLabel}
             >
               Buy Tickets
+            </Button>
+          </View>
+        )}
+
+        {/* ─── Get a Winner (super admin + org admin) ─── */}
+        {showManualDrawButton && (
+          <View style={styles.section}>
+            <Button
+              mode="contained"
+              onPress={handleDrawWinner}
+              loading={isDrawing}
+              disabled={isDrawing}
+              style={styles.drawWinnerButton}
+              contentStyle={styles.winnerButtonContent}
+              buttonColor="#D97706"
+              icon="trophy"
+              labelStyle={styles.winnerButtonLabel}
+            >
+              {isDrawing ? 'Drawing...' : 'Get a Winner'}
             </Button>
           </View>
         )}
@@ -712,6 +802,10 @@ const styles = StyleSheet.create({
     marginTop: 16,
   },
   buyButton: {
+    borderRadius: 12,
+    marginBottom: 12,
+  },
+  drawWinnerButton: {
     borderRadius: 12,
     marginBottom: 12,
   },

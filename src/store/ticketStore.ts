@@ -14,9 +14,8 @@ interface TicketState {
   isLoading: boolean;
   error: string | null;
 
-  // Actions
-  fetchPaidTickets: () => Promise<void>;
-  fetchWinnerTickets: () => Promise<void>;
+  fetchPaidTickets: (raffleIds?: string[]) => Promise<void>;
+  fetchWinnerTickets: (raffleIds?: string[]) => Promise<void>;
   fetchTicketsByRaffle: (raffleId: string) => Promise<Ticket[]>;
   clearError: () => void;
 }
@@ -27,34 +26,26 @@ export const useTicketStore = create<TicketState>((set) => ({
   isLoading: false,
   error: null,
 
-  fetchPaidTickets: async () => {
+  fetchPaidTickets: async (raffleIds?: string[]) => {
     set({ isLoading: true, error: null });
     try {
-      const tickets = await ticketApi.getPaidTickets();
+      const tickets = await ticketApi.getPaidTickets(raffleIds);
       set({ tickets, isLoading: false });
     } catch (err: any) {
       set({ error: err.message, isLoading: false });
     }
   },
 
-  /**
-   * Fetch winner tickets enriched with totalAmount and estimatedAmount
-   * — mirrors the web's admin/winner-tickets page.tsx logic:
-   *   1. Fetch winner tickets
-   *   2. For each winner, fetch the raffle's ticket totals
-   *   3. Attach paidQuantity, totalAmount, estimatedAmount
-   */
-  fetchWinnerTickets: async () => {
+  fetchWinnerTickets: async (raffleIds?: string[]) => {
     set({ isLoading: true, error: null });
     try {
-      const rawWinners = await ticketApi.getWinnerTickets();
+      const rawWinners = await ticketApi.getWinnerTickets(raffleIds);
 
-      // Fetch raffle totals for each winner's raffle (deduplicated)
-      const raffleIds = [...new Set(rawWinners.map((t) => t.donation_formId).filter(Boolean))];
+      const winnerRaffleIds = [...new Set(rawWinners.map((t) => t.donation_formId).filter(Boolean))];
       const totalsByRaffle: Record<string, TicketTotalByRaffle> = {};
 
       await Promise.all(
-        raffleIds.map(async (raffleId) => {
+        winnerRaffleIds.map(async (raffleId) => {
           if (!raffleId) return;
           const totals = await raffleApi.getTicketsAmountByRaffle(raffleId);
           if (totals.length > 0) {
@@ -63,7 +54,6 @@ export const useTicketStore = create<TicketState>((set) => ({
         }),
       );
 
-      // Enrich each winner ticket
       const enriched: EnrichedWinnerTicket[] = rawWinners.map((ticket) => {
         const totals = ticket.donation_formId
           ? totalsByRaffle[ticket.donation_formId]

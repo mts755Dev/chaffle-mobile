@@ -17,19 +17,24 @@ import {
   subscribeTapToPayOnboardingReset,
   subscribeTapToPaySetupComplete,
 } from '../services/tapToPayPrefs';
-import { canAcceptTapToPayTerms } from '../utils/tapToPayAccess';
+import {
+  canSetupTapToPayOnDevice,
+  isOrgTapToPayReady,
+} from '../utils/tapToPayAccess';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 export default function TapToPayOnboardingHost() {
   const navigation = useNavigation<NavigationProp>();
-  const { isAdmin, canManageTapToPay } = useAuthStore();
+  const { isAdmin, role, orgStripeConnected, orgStripeAccountId } = useAuthStore();
   const [showIntro, setShowIntro] = useState(false);
   const [showEnable, setShowEnable] = useState(false);
   const [skippedIntroThisSession, setSkippedIntroThisSession] = useState(false);
 
   const eligible =
-    Platform.OS === 'ios' && canAcceptTapToPayTerms(isAdmin, canManageTapToPay);
+    Platform.OS === 'ios'
+    && canSetupTapToPayOnDevice(isAdmin, role)
+    && isOrgTapToPayReady(role, orgStripeConnected, orgStripeAccountId);
 
   const openTapToPaySettings = useCallback(() => {
     navigation.navigate('AdminTapToPay', { startSetup: true });
@@ -84,7 +89,7 @@ export default function TapToPayOnboardingHost() {
       unsubscribeComplete();
       unsubscribeReset();
     };
-  }, [eligible, isAdmin, canManageTapToPay, refreshOnboardingState]);
+  }, [eligible, isAdmin, role, orgStripeConnected, orgStripeAccountId, refreshOnboardingState]);
 
   useEffect(() => {
     if (!eligible) return;

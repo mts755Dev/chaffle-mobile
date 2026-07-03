@@ -3,17 +3,29 @@
   "compilerOptions": {
     "strict": true,
     "jsx": "react-native",
+    "esModuleInterop": true,
+    "moduleResolution": "bundler",
+    "module": "preserve",
+    "customConditions": [
+      "react-native"
+    ],
+    "allowJs": true,
+    "skipLibCheck": true,
     "baseUrl": ".",
     "paths": {
-      "@/*": ["src/*"],
-      "@assets/*": ["assets/*"]
+      "@/*": [
+        "src/*"
+      ],
+      "@assets/*": [
+        "assets/*"
+      ]
     }
   },
   "include": [
     "**/*.ts",
-    "**/*.tsx",
-    ".expo/types/**/*.ts",
-    "expo-env.d.ts"
+    "**/*.tsx"
   ],
-  "exclude": ["supabase/functions"]
+  "exclude": [
+    "supabase/functions"
+  ]
 }

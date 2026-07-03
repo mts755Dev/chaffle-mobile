@@ -7,45 +7,70 @@ import { COLORS } from '../constants';
 interface CountdownTimerProps {
   targetDate: string | null;
   onExpired?: () => void;
+  /** Use on light backgrounds (e.g. worker dashboard cards). */
+  variant?: 'dark' | 'light';
+  /** Hide the built-in "Draw In" heading when the parent supplies a label. */
+  showLabel?: boolean;
+  /** Single-row layout that fits narrow card widths. */
+  compact?: boolean;
 }
 
-export default function CountdownTimer({ targetDate, onExpired }: CountdownTimerProps) {
+export default function CountdownTimer({
+  targetDate,
+  onExpired,
+  variant = 'dark',
+  showLabel = true,
+  compact = false,
+}: CountdownTimerProps) {
   const { days, hours, minutes, seconds, isExpired } = useCountdown(targetDate);
+  const isLight = variant === 'light';
 
   React.useEffect(() => {
     if (isExpired && onExpired) {
       onExpired();
     }
-  }, [isExpired]);
+  }, [isExpired, onExpired]);
 
   if (isExpired) {
     return (
-      <View style={styles.container}>
-        <Text style={styles.expiredText}>Draw has ended</Text>
+      <View style={[styles.container, compact && styles.containerCompact]}>
+        <Text style={[styles.expiredText, isLight && styles.expiredTextLight]}>
+          Draw has ended
+        </Text>
       </View>
     );
   }
 
+  const blocks = [
+    { value: days, label: 'Days' },
+    { value: hours, label: 'Hours' },
+    { value: minutes, label: 'Mins' },
+    { value: seconds, label: 'Secs' },
+  ];
+
   return (
-    <View style={styles.container}>
-      <Text style={styles.label}>Draw In</Text>
-      <View style={styles.grid}>
-        <View style={styles.block}>
-          <Text style={styles.value}>{String(days).padStart(2, '0')}</Text>
-          <Text style={styles.blockLabel}>Days</Text>
-        </View>
-        <View style={styles.block}>
-          <Text style={styles.value}>{String(hours).padStart(2, '0')}</Text>
-          <Text style={styles.blockLabel}>Hours</Text>
-        </View>
-        <View style={styles.block}>
-          <Text style={styles.value}>{String(minutes).padStart(2, '0')}</Text>
-          <Text style={styles.blockLabel}>Mins</Text>
-        </View>
-        <View style={styles.block}>
-          <Text style={styles.value}>{String(seconds).padStart(2, '0')}</Text>
-          <Text style={styles.blockLabel}>Secs</Text>
-        </View>
+    <View style={[styles.container, compact && styles.containerCompact]}>
+      {showLabel ? (
+        <Text style={[styles.label, isLight && styles.labelLight]}>Draw In</Text>
+      ) : null}
+      <View style={[styles.grid, compact && styles.gridCompact]}>
+        {blocks.map((block) => (
+          <View
+            key={block.label}
+            style={[
+              styles.block,
+              compact && styles.blockCompact,
+              isLight && styles.blockLight,
+            ]}
+          >
+            <Text style={[styles.value, isLight && styles.valueLight]}>
+              {String(block.value).padStart(2, '0')}
+            </Text>
+            <Text style={[styles.blockLabel, isLight && styles.blockLabelLight]}>
+              {block.label}
+            </Text>
+          </View>
+        ))}
       </View>
     </View>
   );
@@ -56,17 +81,28 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     width: '100%',
   },
+  containerCompact: {
+    alignItems: 'stretch',
+  },
   label: {
     fontSize: 11,
     color: 'rgba(255, 255, 255, 0.7)',
     marginBottom: 6,
     fontWeight: '600',
   },
+  labelLight: {
+    color: COLORS.textSecondary,
+  },
   grid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     justifyContent: 'center',
     gap: 6,
+    width: '100%',
+  },
+  gridCompact: {
+    flexWrap: 'nowrap',
+    justifyContent: 'space-between',
   },
   block: {
     backgroundColor: 'rgba(0, 0, 0, 0.18)',
@@ -76,10 +112,26 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     width: '44%',
   },
+  blockCompact: {
+    flex: 1,
+    minWidth: 0,
+    width: undefined,
+    paddingVertical: 6,
+    paddingHorizontal: 4,
+  },
+  blockLight: {
+    backgroundColor: COLORS.accent,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
   value: {
     fontSize: 18,
     fontWeight: '800',
     color: '#ffffff',
+  },
+  valueLight: {
+    fontSize: 15,
+    color: COLORS.foreground,
   },
   blockLabel: {
     fontSize: 8,
@@ -88,9 +140,16 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
     letterSpacing: 0.5,
   },
+  blockLabelLight: {
+    fontSize: 9,
+    color: COLORS.textSecondary,
+  },
   expiredText: {
     fontSize: 14,
     fontWeight: 'bold',
     color: '#ffffff',
+  },
+  expiredTextLight: {
+    color: COLORS.textSecondary,
   },
 });

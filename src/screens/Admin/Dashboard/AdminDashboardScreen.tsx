@@ -20,6 +20,7 @@ import {
 } from 'react-native-paper';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
+import * as Linking from 'expo-linking';
 import { COLORS } from '../../../constants';
 import { RootStackParamList, TicketTotalByRaffle } from '../../../types';
 import { useRaffleStore } from '../../../store/raffleStore';
@@ -28,15 +29,29 @@ import { formatCurrency } from '../../../utils';
 import LoadingScreen from '../../../components/LoadingScreen';
 import TapToPayIcon from '../../../components/TapToPayIcon';
 import {
-  canAcceptTapToPayTerms,
+  canSetupTapToPayOnDevice,
+  canUseInPersonPayment,
+  showOrgStripeRequiredAlert,
   showTapToPayAdminRequiredAlert,
+  usesOrganizationStripe,
 } from '../../../utils/tapToPayAccess';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 export default function AdminDashboardScreen() {
   const navigation = useNavigation<NavigationProp>();
-  const { logout, isAdmin, canManageTapToPay } = useAuthStore();
+  const {
+    logout,
+    isAdmin,
+    canManageTapToPay,
+    role,
+    organizationId,
+    organizationName,
+    orgStripeConnected,
+    orgStripeAccountId,
+    connectStripe,
+    refreshStripeStatus,
+  } = useAuthStore();
   const {
     forms,
     ticketTotals,
@@ -49,12 +64,16 @@ export default function AdminDashboardScreen() {
     createForm,
   } = useRaffleStore();
 
+  const isOrgAdmin = role === 'org_admin';
+
   const [refreshing, setRefreshing] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [filterText, setFilterText] = useState('');
+  const [isConnectingStripe, setIsConnectingStripe] = useState(false);
+  const [isRefreshingStripe, setIsRefreshingStripe] = useState(false);
 
   const showTapToPayFeatures =
-    Platform.OS === 'ios' && canAcceptTapToPayTerms(isAdmin, canManageTapToPay);
+    Platform.OS === 'ios' && canSetupTapToPayOnDevice(isAdmin, role);
 
   // Filter forms by title
   const filteredForms = filterText.trim()
@@ -75,10 +94,15 @@ export default function AdminDashboardScreen() {
   };
 
   const loadData = async () => {
+    const orgId = isOrgAdmin ? organizationId : undefined;
+    await fetchForms(orgId);
+    const { forms: loadedForms } = useRaffleStore.getState();
+    const raffleIds = isOrgAdmin
+      ? loadedForms.map((f) => f.id)
+      : undefined;
     await Promise.all([
-      fetchForms(),
-      fetchTicketTotals(),
-      fetchCompletedRaffleIds(),
+      fetchTicketTotals(undefined, raffleIds),
+      fetchCompletedRaffleIds(raffleIds),
     ]);
   };
 
@@ -91,7 +115,7 @@ export default function AdminDashboardScreen() {
   const handleCreateRaffle = async () => {
     setIsCreating(true);
     try {
-      const newForm = await createForm();
+      const newForm = await createForm(isOrgAdmin ? organizationId : undefined);
       navigation.navigate('EditRaffle', { id: newForm.id });
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Failed to create raffle');
@@ -111,6 +135,35 @@ export default function AdminDashboardScreen() {
         },
       },
     ]);
+  };
+
+  const handleConnectStripe = async () => {
+    setIsConnectingStripe(true);
+    try {
+      const onboardingUrl = await connectStripe();
+      await Linking.openURL(onboardingUrl);
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Failed to start Stripe onboarding');
+    } finally {
+      setIsConnectingStripe(false);
+    }
+  };
+
+  const handleRefreshStripe = async () => {
+    setIsRefreshingStripe(true);
+    try {
+      const result = await refreshStripeStatus();
+      Alert.alert(
+        'Stripe Status',
+        result.charges_enabled
+          ? 'Stripe is connected and ready to accept payments!'
+          : 'Stripe onboarding is not yet complete. Please finish onboarding in your browser.',
+      );
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Failed to refresh Stripe status');
+    } finally {
+      setIsRefreshingStripe(false);
+    }
   };
 
   const getTicketTotal = (raffleId: string): TicketTotalByRaffle | undefined => {
@@ -159,6 +212,42 @@ export default function AdminDashboardScreen() {
         </Button>
       </View>
 
+      {isOrgAdmin && (
+        <View style={styles.stripeBar}>
+          {orgStripeConnected ? (
+            <Chip icon="check-circle" style={styles.stripeConnectedChip} textStyle={styles.stripeConnectedText}>
+              Stripe Connected
+            </Chip>
+          ) : (
+            <>
+              <Button
+                mode="contained"
+                onPress={handleConnectStripe}
+                loading={isConnectingStripe}
+                disabled={isConnectingStripe}
+                icon="link-variant"
+                compact
+                style={styles.stripeConnectButton}
+                buttonColor={COLORS.primary}
+              >
+                Connect Stripe
+              </Button>
+              <Button
+                mode="outlined"
+                onPress={handleRefreshStripe}
+                loading={isRefreshingStripe}
+                disabled={isRefreshingStripe}
+                icon="refresh"
+                compact
+                style={styles.stripeRefreshButton}
+              >
+                Refresh
+              </Button>
+            </>
+          )}
+        </View>
+      )}
+
       <ScrollView
         style={styles.flex}
         contentContainerStyle={styles.content}
@@ -185,6 +274,12 @@ export default function AdminDashboardScreen() {
             ) : undefined
           }
         />
+
+        {isOrgAdmin && organizationName && (
+          <Text style={styles.orgBanner}>
+            {organizationName}
+          </Text>
+        )}
 
         {showTapToPayFeatures && (
           <TouchableOpacity
@@ -215,7 +310,7 @@ export default function AdminDashboardScreen() {
         )}
 
         <Text style={styles.sectionTitle}>
-          Raffles ({filteredForms.length})
+          {isOrgAdmin ? 'My Raffles' : 'All Raffles'} ({filteredForms.length})
         </Text>
 
         {storeError && (
@@ -296,10 +391,24 @@ export default function AdminDashboardScreen() {
                     </View>
                     <View style={styles.statsActions}>
                       <IconButton
+                        icon="pencil"
+                        iconColor={COLORS.primary}
+                        size={20}
+                        onPress={() => navigation.navigate('EditRaffle', { id: form.id })}
+                        style={styles.iconAction}
+                      />
+                      <IconButton
                         icon="eye"
                         iconColor={COLORS.foreground}
                         size={20}
                         onPress={() => navigation.navigate('PreviewRaffle', { id: form.id })}
+                        style={styles.iconAction}
+                      />
+                      <IconButton
+                        icon="account-group"
+                        iconColor={COLORS.primary}
+                        size={20}
+                        onPress={() => navigation.navigate('ManageWorkers', { raffleId: form.id })}
                         style={styles.iconAction}
                       />
                       {hasStripe && !completed ? (
@@ -308,8 +417,22 @@ export default function AdminDashboardScreen() {
                           iconColor={COLORS.primary}
                           size={20}
                           onPress={() => {
-                            if (!canManageTapToPay) {
-                              showTapToPayAdminRequiredAlert();
+                            if (
+                              !canUseInPersonPayment(
+                                isAdmin,
+                                role,
+                                orgStripeConnected,
+                                orgStripeAccountId,
+                              )
+                            ) {
+                              if (
+                                usesOrganizationStripe(role)
+                                && !orgStripeConnected
+                              ) {
+                                showOrgStripeRequiredAlert(undefined, role);
+                              } else {
+                                showTapToPayAdminRequiredAlert();
+                              }
                               return;
                             }
                             navigation.navigate('InPersonPayment', { id: form.id });
@@ -369,10 +492,41 @@ const styles = StyleSheet.create({
     flex: 1,
     borderColor: COLORS.border,
   },
+  stripeBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    gap: 8,
+    backgroundColor: COLORS.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: COLORS.border,
+  },
+  stripeConnectedChip: {
+    backgroundColor: '#e8f5e9',
+  },
+  stripeConnectedText: {
+    color: COLORS.success,
+    fontWeight: '600',
+  },
+  stripeConnectButton: {
+    flex: 1,
+    borderRadius: 8,
+  },
+  stripeRefreshButton: {
+    borderColor: COLORS.border,
+    borderRadius: 8,
+  },
   filterInput: {
     backgroundColor: COLORS.white,
     marginBottom: 14,
     fontSize: 14,
+  },
+  orgBanner: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: COLORS.textSecondary,
+    marginBottom: 4,
   },
   sectionTitle: {
     fontSize: 20,

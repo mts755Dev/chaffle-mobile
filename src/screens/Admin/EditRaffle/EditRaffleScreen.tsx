@@ -24,6 +24,7 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { COLORS, API_BASE_URL } from '../../../constants';
 import { RootStackParamList, DonationForm } from '../../../types';
 import { useRaffleStore } from '../../../store/raffleStore';
+import { useAuthStore } from '../../../store/authStore';
 import { stripeApi } from '../../../services/api/stripeApi';
 import { secureLinkApi } from '../../../services/api/raffleApi';
 import { useImageUpload } from '../../../hooks/useImageUpload';
@@ -53,6 +54,8 @@ export default function EditRaffleScreen() {
   const { id } = route.params;
 
   const { fetchFormById, updateForm, currentForm, isLoading } = useRaffleStore();
+  const { role } = useAuthStore();
+  const isOrgAdmin = role === 'org_admin';
   const { pickImage, uploadImage, isUploading } = useImageUpload();
 
   const [form, setForm] = useState<Partial<DonationForm>>({});
@@ -220,55 +223,57 @@ export default function EditRaffleScreen() {
           </Button>
         </View>
 
-        {/* Stripe Connect Section — matches web */}
-        <Card style={styles.card}>
-          <Card.Content>
-            <Text style={styles.cardTitle}>Stripe Connect</Text>
-            {isStripeLinked ? (
-              <View style={styles.stripeLinkedBanner}>
-                <Icon source="wallet" size={20} color={COLORS.white} />
-                <Text style={styles.stripeLinkedBannerText}>Account linked already</Text>
-              </View>
-            ) : (
-              <View style={styles.stripeActions}>
-                <Button
-                  mode="contained"
-                  onPress={() => {
-                    Alert.alert(
-                      'Generate Secure Link',
-                      'Generating a new link will invalidate any previous links. Continue?',
-                      [
-                        { text: 'Cancel', style: 'cancel' },
-                        { text: 'Continue', onPress: handleGenerateSecureLink },
-                      ],
-                    );
-                  }}
-                  loading={isGeneratingSecureLink}
-                  disabled={isGeneratingSecureLink}
-                  icon="shield-check"
-                  style={styles.stripeButton}
-                  buttonColor={COLORS.primary}
-                >
-                  Generate a secure link
-                </Button>
-
-                {stripeAccount?.id && (
+        {/* Stripe Connect Section — hidden for org_admin (managed at org level) */}
+        {!isOrgAdmin && (
+          <Card style={styles.card}>
+            <Card.Content>
+              <Text style={styles.cardTitle}>Stripe Connect</Text>
+              {isStripeLinked ? (
+                <View style={styles.stripeLinkedBanner}>
+                  <Icon source="wallet" size={20} color={COLORS.white} />
+                  <Text style={styles.stripeLinkedBannerText}>Account linked already</Text>
+                </View>
+              ) : (
+                <View style={styles.stripeActions}>
                   <Button
-                    mode="outlined"
-                    onPress={handleRefreshStripeStatus}
-                    loading={isRefreshingStripe}
-                    disabled={isRefreshingStripe}
-                    icon="refresh"
-                    style={styles.refreshButton}
-                    textColor={COLORS.foreground}
+                    mode="contained"
+                    onPress={() => {
+                      Alert.alert(
+                        'Generate Secure Link',
+                        'Generating a new link will invalidate any previous links. Continue?',
+                        [
+                          { text: 'Cancel', style: 'cancel' },
+                          { text: 'Continue', onPress: handleGenerateSecureLink },
+                        ],
+                      );
+                    }}
+                    loading={isGeneratingSecureLink}
+                    disabled={isGeneratingSecureLink}
+                    icon="shield-check"
+                    style={styles.stripeButton}
+                    buttonColor={COLORS.primary}
                   >
-                    {isRefreshingStripe ? 'Checking...' : 'Refresh Status'}
+                    Generate a secure link
                   </Button>
-                )}
-              </View>
-            )}
-          </Card.Content>
-        </Card>
+
+                  {stripeAccount?.id && (
+                    <Button
+                      mode="outlined"
+                      onPress={handleRefreshStripeStatus}
+                      loading={isRefreshingStripe}
+                      disabled={isRefreshingStripe}
+                      icon="refresh"
+                      style={styles.refreshButton}
+                      textColor={COLORS.foreground}
+                    >
+                      {isRefreshingStripe ? 'Checking...' : 'Refresh Status'}
+                    </Button>
+                  )}
+                </View>
+              )}
+            </Card.Content>
+          </Card>
+        )}
 
         {/* Form Fields — matches web: Title, Draw Date, Location, Raffle Info, Free Ticket Link, Rules, Submit */}
         <Card style={styles.card}>

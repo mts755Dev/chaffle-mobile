@@ -9,24 +9,30 @@ import { Text, Card, Divider, Icon, Searchbar, Chip } from 'react-native-paper';
 import { useFocusEffect } from '@react-navigation/native';
 import { COLORS } from '../../../constants';
 import { useTicketStore, EnrichedWinnerTicket } from '../../../store/ticketStore';
+import { useAuthStore } from '../../../store/authStore';
+import { useRaffleStore } from '../../../store/raffleStore';
 import { formatCurrency, shortId, formatDate } from '../../../utils';
 import LoadingScreen from '../../../components/LoadingScreen';
 
 export default function AdminWinnersScreen() {
   const { winnerTickets, isLoading, fetchWinnerTickets } = useTicketStore();
+  const { role, organizationId } = useAuthStore();
+  const { forms } = useRaffleStore();
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
-  // Load data from DB on screen focus
+  const isOrgAdmin = role === 'org_admin';
+  const orgRaffleIds = isOrgAdmin ? forms.map((f) => f.id) : undefined;
+
   useFocusEffect(
     useCallback(() => {
-      fetchWinnerTickets();
-    }, []),
+      fetchWinnerTickets(orgRaffleIds);
+    }, [organizationId]),
   );
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await fetchWinnerTickets();
+    await fetchWinnerTickets(orgRaffleIds);
     setRefreshing(false);
   };
 

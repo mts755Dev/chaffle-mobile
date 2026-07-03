@@ -32,6 +32,8 @@ import { RootStackParamList } from '../../types';
 import { ticketApi } from '../../services/api/raffleApi';
 import { stripeApi } from '../../services/api/stripeApi';
 import { formatCurrency, getPublicIp } from '../../utils';
+import { useAuthStore } from '../../store/authStore';
+import { blockWorkerFromForeignRaffle } from '../../utils/workerAccess';
 import TicketTierSelector from '../../components/TicketTierSelector';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -68,7 +70,19 @@ function BuyTicketsContent() {
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute<BuyTicketsRouteProp>();
   const { raffleId, donationForm } = route.params;
+  const { role, raffleId: workerRaffleId } = useAuthStore();
   const { initPaymentSheet, presentPaymentSheet } = useStripe();
+  const [workerBlocked, setWorkerBlocked] = useState(false);
+
+  useEffect(() => {
+    if (
+      !blockWorkerFromForeignRaffle(role, workerRaffleId, raffleId, () =>
+        navigation.goBack(),
+      )
+    ) {
+      setWorkerBlocked(true);
+    }
+  }, [role, workerRaffleId, raffleId, navigation]);
 
   const [selectedPrice, setSelectedPrice] = useState<number | null>(null);
   const [selectedQuantity, setSelectedQuantity] = useState<number>(0);
@@ -239,6 +253,8 @@ function BuyTicketsContent() {
       setIsProcessing(false);
     }
   };
+
+  if (workerBlocked) return null;
 
   return (
     <KeyboardAvoidingView

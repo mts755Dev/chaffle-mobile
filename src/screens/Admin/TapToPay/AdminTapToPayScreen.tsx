@@ -11,13 +11,16 @@ import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { COLORS, STRIPE_TERMINAL_SIMULATED } from '../../../constants';
 import { RootStackParamList } from '../../../types';
 import { useAuthStore } from '../../../store/authStore';
+import { useStripeTerminalAccountScope } from '../../../contexts/StripeTerminalAccountContext';
 import { useStripeReader } from '../../../hooks/useStripeReader';
 import TapToPayConnectionPanel from '../../../components/TapToPayConnectionPanel';
 import TapToPayMerchantEducationCard from '../../../components/TapToPayMerchantEducationCard';
 import { presentAppleTapToPayEducation } from '../../../services/tapToPayEducation';
 import {
-  canAcceptTapToPayTerms,
-  showTapToPayAdminRequiredAlert,
+  canSetupTapToPayOnDevice,
+  isOrgTapToPayReady,
+  showOrgStripeRequiredAlert,
+  usesOrganizationStripe,
 } from '../../../utils/tapToPayAccess';
 import { getTapToPayTermsAcceptedFromApple } from '../../../services/tapToPayTermsState';
 
@@ -27,11 +30,81 @@ type AdminTapToPayRoute = RouteProp<RootStackParamList, 'AdminTapToPay'>;
 export default function AdminTapToPayScreen() {
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute<AdminTapToPayRoute>();
-  const { isAdmin, canManageTapToPay } = useAuthStore();
+  const {
+    isAdmin,
+    role,
+    organizationName,
+    orgStripeAccountId,
+    orgStripeConnected,
+  } = useAuthStore();
+
+  const allowed = canSetupTapToPayOnDevice(isAdmin, role);
+  const isOrgScoped = usesOrganizationStripe(role);
+  const terminalStripeAccount =
+    isOrgScoped ? orgStripeAccountId ?? undefined : undefined;
+  const merchantDisplayName =
+    isOrgScoped ? (organizationName?.trim() || 'Organization') : undefined;
+
+  useEffect(() => {
+    if (!allowed) {
+      navigation.goBack();
+    }
+  }, [allowed, navigation]);
+
+  useEffect(() => {
+    if (!allowed || !isOrgScoped) return;
+    if (!isOrgTapToPayReady(role, orgStripeConnected, orgStripeAccountId)) {
+      showOrgStripeRequiredAlert(() => navigation.goBack(), role);
+    }
+  }, [allowed, isOrgScoped, role, orgStripeConnected, orgStripeAccountId, navigation]);
+
+  if (!allowed) {
+    return null;
+  }
+
+  if (Platform.OS !== 'ios') {
+    return (
+      <View style={styles.centered}>
+        <Text style={styles.unavailable}>
+          Tap to Pay on iPhone is only available on compatible iPhones.
+        </Text>
+      </View>
+    );
+  }
+
+  if (isOrgScoped && !isOrgTapToPayReady(role, orgStripeConnected, orgStripeAccountId)) {
+    return null;
+  }
+
+  return (
+    <AdminTapToPayContent
+      route={route}
+      navigation={navigation}
+      terminalStripeAccount={terminalStripeAccount}
+      merchantDisplayName={merchantDisplayName}
+      isOrgScoped={isOrgScoped}
+    />
+  );
+}
+
+function AdminTapToPayContent({
+  route,
+  navigation,
+  terminalStripeAccount,
+  merchantDisplayName,
+  isOrgScoped,
+}: {
+  route: AdminTapToPayRoute;
+  navigation: NavigationProp;
+  terminalStripeAccount?: string;
+  merchantDisplayName?: string;
+  isOrgScoped: boolean;
+}) {
+  const { isAdmin, role } = useAuthStore();
   const [educationStatus, setEducationStatus] = useState<string | null>(null);
   const [setupStarted, setSetupStarted] = useState(false);
 
-  const allowed = canAcceptTapToPayTerms(isAdmin, canManageTapToPay);
+  useStripeTerminalAccountScope(terminalStripeAccount);
 
   const {
     connectedReader,
@@ -41,7 +114,7 @@ export default function AdminTapToPayScreen() {
     disconnectReader,
     paymentError,
     readerUpdateProgress,
-  } = useStripeReader();
+  } = useStripeReader({ stripeAccount: terminalStripeAccount, merchantDisplayName });
 
   const runSetup = useCallback(async () => {
     setSetupStarted(true);
@@ -58,16 +131,9 @@ export default function AdminTapToPayScreen() {
     );
   }, [navigation, resetTapToPayDeviceState]);
 
-  useEffect(() => {
-    if (!allowed) {
-      showTapToPayAdminRequiredAlert();
-      navigation.goBack();
-    }
-  }, [allowed, navigation]);
-
   useFocusEffect(
     useCallback(() => {
-      if (!allowed || Platform.OS !== 'ios') return;
+      if (Platform.OS !== 'ios') return;
 
       if (route.params?.startSetup) {
         navigation.setParams({ startSetup: undefined });
@@ -78,7 +144,7 @@ export default function AdminTapToPayScreen() {
       }
 
       return undefined;
-    }, [allowed, route.params?.startSetup, navigation, runSetup]),
+    }, [route.params?.startSetup, navigation, runSetup]),
   );
 
   const runAppleEducation = useCallback(async () => {
@@ -96,23 +162,8 @@ export default function AdminTapToPayScreen() {
     void runAppleEducation();
   };
 
-  if (!allowed) {
-    return null;
-  }
-
-  if (Platform.OS !== 'ios') {
-    return (
-      <View style={styles.centered}>
-        <Text style={styles.unavailable}>
-          Tap to Pay on iPhone is only available on compatible iPhones.
-        </Text>
-      </View>
-    );
-  }
-
   const handleEnable = () => {
-    if (!canAcceptTapToPayTerms(isAdmin, canManageTapToPay)) {
-      showTapToPayAdminRequiredAlert();
+    if (!canSetupTapToPayOnDevice(isAdmin, role)) {
       return;
     }
     void runSetup();
@@ -128,8 +179,9 @@ export default function AdminTapToPayScreen() {
     <ScrollView style={styles.flex} contentContainerStyle={styles.content}>
       <Text style={styles.heading}>Tap to Pay on iPhone</Text>
       <Text style={styles.subheading}>
-        Set up and manage contactless payments for in-person ticket sales. This is separate from your checkout
-        flow — use Tap to Pay on iPhone on a raffle when you&apos;re ready to charge a customer.
+        {isOrgScoped
+          ? 'Set up Tap to Pay once on this iPhone for your organization. After setup, in-person payments work for every raffle under your organization\'s Stripe account.'
+          : 'Set up and manage contactless payments for in-person ticket sales. This is separate from your checkout flow — use Tap to Pay on iPhone on a raffle when you\'re ready to charge a customer.'}
       </Text>
 
       {STRIPE_TERMINAL_SIMULATED && (

@@ -2,8 +2,8 @@
 //
 // Terminal payments use DIRECT CHARGES — same as online payments.
 // The PaymentIntent is created on the connected (raffle) account.
-// The SDK is authenticated with the connected account's connection token,
-// so it can retrieve and process the PaymentIntent.
+
+import { computeChargeBreakdown } from "../_shared/paymentFees.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -60,26 +60,25 @@ Deno.serve(async (req: Request) => {
       }
 
       const baseAmountCents = Math.round(amount * 100);
-      let totalCents = baseAmountCents;
-      let feeCents = 0;
-
-      // Match online flow: 10% extra charged to customer, goes to Chaffle
-      if (isApplicationAmount) {
-        feeCents = Math.round(baseAmountCents * 0.1);
-        totalCents = baseAmountCents + feeCents;
-      }
+      const breakdown = computeChargeBreakdown(baseAmountCents, {
+        includePlatformFee: !!isApplicationAmount,
+        channel: "terminal",
+      });
 
       const params: Record<string, string> = {
-        amount: String(totalCents),
+        amount: String(breakdown.totalCents),
         currency: "usd",
         "payment_method_types[]": "card_present",
         capture_method: "automatic",
+        "metadata[baseAmountCents]": String(breakdown.baseAmountCents),
+        "metadata[processingFeeCents]": String(breakdown.processingFeeCents),
+        "metadata[platformFeeCents]": String(breakdown.platformFeeCents),
       };
 
       if (description) params.description = description;
 
-      if (feeCents > 0) {
-        params.application_fee_amount = String(feeCents);
+      if (breakdown.platformFeeCents > 0) {
+        params.application_fee_amount = String(breakdown.platformFeeCents);
       }
 
       if (metadata) {
@@ -88,7 +87,6 @@ Deno.serve(async (req: Request) => {
         }
       }
 
-      // Direct charge: created ON the connected account
       const pi = await stripePost("/payment_intents", params, stripeAccount);
 
       return jsonResponse({
@@ -97,6 +95,7 @@ Deno.serve(async (req: Request) => {
         status: pi.status,
         amount: pi.amount,
         currency: pi.currency,
+        chargeBreakdown: breakdown,
       });
     }
 

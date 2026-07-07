@@ -21,15 +21,18 @@ import {
 } from 'react-native-paper';
 import { useRoute, RouteProp, useFocusEffect } from '@react-navigation/native';
 import { COLORS, PASSWORD_REGEX } from '../../../constants';
-import { RootStackParamList, Worker } from '../../../types';
+import { RootStackParamList, Worker, OrgApprovalStatus } from '../../../types';
 import { useAuthStore } from '../../../store/authStore';
 import { useWorkerStore } from '../../../store/workerStore';
+import { raffleApi } from '../../../services/api/raffleApi';
 import { formatDate } from '../../../utils';
+import { formatOrganizationLabel } from '../../../utils/orgDisplay';
 import {
   findWorkerWithEmail,
   workerDuplicateEmailMessage,
 } from '../../../utils/workerEmail';
 import LoadingScreen from '../../../components/LoadingScreen';
+import * as Clipboard from 'expo-clipboard';
 
 type ManageWorkersRouteProp = RouteProp<RootStackParamList, 'ManageWorkers'>;
 
@@ -44,9 +47,17 @@ const DURATION_OPTIONS = [
 
 export default function ManageWorkersScreen() {
   const route = useRoute<ManageWorkersRouteProp>();
-  const { raffleId } = route.params;
+  const {
+    raffleId,
+    organizationId: routeOrganizationId,
+    raffleTitle: routeRaffleTitle,
+    organizationName: routeOrganizationName,
+  } = route.params;
 
-  const { organizationId, createWorker } = useAuthStore();
+  const { role, organizationId: authOrganizationId, createWorker } = useAuthStore();
+  const isSuperAdmin = role === 'super_admin';
+  const isOrgAdmin = role === 'org_admin';
+
   const {
     workers,
     isLoading: storeLoading,
@@ -64,21 +75,71 @@ export default function ManageWorkersScreen() {
   const [isCreating, setIsCreating] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [raffleOrganizationId, setRaffleOrganizationId] = useState<string | null | undefined>(
+    routeOrganizationId,
+  );
+  const [raffleTitle, setRaffleTitle] = useState(routeRaffleTitle ?? '');
+  const [organizationName, setOrganizationName] = useState(routeOrganizationName ?? '');
+  const [organizationApprovalStatus, setOrganizationApprovalStatus] =
+    useState<OrgApprovalStatus | null>(null);
+  const [visiblePasswordIds, setVisiblePasswordIds] = useState<Record<string, boolean>>({});
+
+  const effectiveOrganizationId = isSuperAdmin
+    ? raffleOrganizationId ?? null
+    : authOrganizationId ?? raffleOrganizationId ?? null;
+
+  const loadRaffleContext = useCallback(async () => {
+    const form = await raffleApi.getDonationFormById(raffleId);
+    if (!form) return;
+
+    setRaffleOrganizationId(form.organization_id ?? null);
+    setRaffleTitle(form.title || routeRaffleTitle || 'Untitled Raffle');
+    setOrganizationName(form.organization_name ?? '');
+    setOrganizationApprovalStatus(form.organization_approval_status ?? null);
+  }, [raffleId, routeRaffleTitle]);
 
   useFocusEffect(
     useCallback(() => {
+      clearError();
+      void loadRaffleContext();
       fetchWorkers(raffleId);
-    }, [raffleId]),
+    }, [raffleId, loadRaffleContext, fetchWorkers, clearError]),
   );
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await fetchWorkers(raffleId);
+    await Promise.all([loadRaffleContext(), fetchWorkers(raffleId)]);
     setRefreshing(false);
+  };
+
+  const togglePasswordVisibility = (workerId: string) => {
+    setVisiblePasswordIds((current) => ({
+      ...current,
+      [workerId]: !current[workerId],
+    }));
+  };
+
+  const copyPassword = async (worker: Worker) => {
+    if (!worker.login_password) {
+      Alert.alert('Password unavailable', 'This worker was created before passwords were saved.');
+      return;
+    }
+    await Clipboard.setStringAsync(worker.login_password);
+    Alert.alert('Copied', 'Worker password copied to clipboard.');
+  };
+
+  const renderPasswordLabel = (worker: Worker) => {
+    if (!worker.login_password) {
+      return 'Password: Not saved';
+    }
+    return visiblePasswordIds[worker.id]
+      ? `Password: ${worker.login_password}`
+      : `Password: ${'•'.repeat(Math.min(worker.login_password.length, 12))}`;
   };
 
   const handleCreate = async () => {
     setFormError(null);
+    clearError();
 
     if (!email.trim()) {
       setFormError('Email is required');
@@ -92,8 +153,8 @@ export default function ManageWorkersScreen() {
       setFormError('Password must contain: uppercase, lowercase, number, special character, min 8 chars');
       return;
     }
-    if (!organizationId) {
-      setFormError('Organization not found');
+    if (isOrgAdmin && !effectiveOrganizationId) {
+      setFormError('This raffle is not linked to your organization');
       return;
     }
 
@@ -106,7 +167,13 @@ export default function ManageWorkersScreen() {
 
     setIsCreating(true);
     try {
-      await createWorker(email.trim(), password, raffleId, organizationId, durationHours);
+      await createWorker(
+        email.trim(),
+        password,
+        raffleId,
+        effectiveOrganizationId,
+        durationHours,
+      );
       await fetchWorkers(raffleId);
       setEmail('');
       setPassword('');
@@ -121,18 +188,18 @@ export default function ManageWorkersScreen() {
 
   const handleDelete = (worker: Worker) => {
     Alert.alert(
-      'Delete Worker',
+      'Terminate Worker',
       `Remove ${worker.email}? They will no longer be able to access the app.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Delete',
+          text: 'Terminate',
           style: 'destructive',
           onPress: async () => {
             try {
               await removeWorker(worker.id);
             } catch (err: any) {
-              Alert.alert('Error', err.message || 'Failed to delete worker');
+              Alert.alert('Error', err.message || 'Failed to terminate worker');
             }
           },
         },
@@ -143,46 +210,10 @@ export default function ManageWorkersScreen() {
   const isExpired = (expiresAt: string) => new Date(expiresAt) < new Date();
 
   const selectedDuration = DURATION_OPTIONS.find((d) => d.value === durationHours);
-
-  const renderWorker = ({ item }: { item: Worker }) => {
-    const expired = isExpired(item.expires_at);
-
-    return (
-      <Card style={styles.workerCard}>
-        <Card.Content>
-          <View style={styles.workerRow}>
-            <View style={styles.workerInfo}>
-              <Text style={styles.workerEmail}>{item.email}</Text>
-              <View style={styles.workerMeta}>
-                <Icon source="clock-outline" size={13} color={COLORS.textLight} />
-                <Text style={styles.workerMetaText}>
-                  Expires: {formatDate(item.expires_at, 'MMM D, YYYY h:mm A')}
-                </Text>
-              </View>
-            </View>
-            <View style={styles.workerActions}>
-              {expired ? (
-                <Chip style={styles.expiredChip} textStyle={styles.expiredChipText} compact>
-                  Expired
-                </Chip>
-              ) : (
-                <Chip style={styles.activeChip} textStyle={styles.activeChipText} compact>
-                  Active
-                </Chip>
-              )}
-              <IconButton
-                icon="delete-outline"
-                iconColor={COLORS.error}
-                size={20}
-                onPress={() => handleDelete(item)}
-                style={styles.deleteBtn}
-              />
-            </View>
-          </View>
-        </Card.Content>
-      </Card>
-    );
-  };
+  const orgDisplayName = formatOrganizationLabel(
+    effectiveOrganizationId ? organizationName : null,
+    organizationApprovalStatus,
+  );
 
   if (storeLoading && workers.length === 0 && !isCreating) {
     return <LoadingScreen message="Loading workers..." />;
@@ -196,13 +227,84 @@ export default function ManageWorkersScreen() {
       <FlatList
         data={workers}
         keyExtractor={(item) => item.id}
-        renderItem={renderWorker}
+        renderItem={({ item }) => {
+          const expired = isExpired(item.expires_at);
+
+          return (
+            <Card style={styles.workerCard}>
+              <Card.Content>
+                <View style={styles.workerRow}>
+                  <View style={styles.workerInfo}>
+                    <Text style={styles.workerEmail}>{item.email}</Text>
+                    <View style={styles.workerMeta}>
+                      <Icon source="lock-outline" size={13} color={COLORS.textLight} />
+                      <Text style={styles.workerMetaText} selectable={!!item.login_password}>
+                        {renderPasswordLabel(item)}
+                      </Text>
+                      {item.login_password ? (
+                        <>
+                          <IconButton
+                            icon={visiblePasswordIds[item.id] ? 'eye-off-outline' : 'eye-outline'}
+                            iconColor={COLORS.textSecondary}
+                            size={16}
+                            onPress={() => togglePasswordVisibility(item.id)}
+                            style={styles.inlineIconBtn}
+                          />
+                          <IconButton
+                            icon="content-copy"
+                            iconColor={COLORS.textSecondary}
+                            size={16}
+                            onPress={() => void copyPassword(item)}
+                            style={styles.inlineIconBtn}
+                          />
+                        </>
+                      ) : null}
+                    </View>
+                    <View style={styles.workerMeta}>
+                      <Icon source="clock-outline" size={13} color={COLORS.textLight} />
+                      <Text style={styles.workerMetaText}>
+                        Expires: {formatDate(item.expires_at, 'MMM D, YYYY h:mm A')}
+                      </Text>
+                    </View>
+                  </View>
+                  <View style={styles.workerActions}>
+                    {expired ? (
+                      <Chip style={styles.expiredChip} textStyle={styles.expiredChipText} compact>
+                        Expired
+                      </Chip>
+                    ) : (
+                      <Chip style={styles.activeChip} textStyle={styles.activeChipText} compact>
+                        Active
+                      </Chip>
+                    )}
+                    <IconButton
+                      icon="delete-outline"
+                      iconColor={COLORS.error}
+                      size={20}
+                      onPress={() => handleDelete(item)}
+                      style={styles.deleteBtn}
+                    />
+                  </View>
+                </View>
+              </Card.Content>
+            </Card>
+          );
+        }}
         contentContainerStyle={styles.list}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
         ListHeaderComponent={
           <View>
+            <Card style={styles.contextCard}>
+              <Card.Content>
+                <Text style={styles.contextTitle}>{raffleTitle || 'Raffle Workers'}</Text>
+                {isSuperAdmin ? (
+                  <Text style={styles.contextMeta}>Organization: {orgDisplayName}</Text>
+                ) : null}
+              </Card.Content>
+            </Card>
+
             <Card style={styles.formCard}>
               <Card.Content>
                 <Text style={styles.formTitle}>Add Worker</Text>
@@ -272,9 +374,12 @@ export default function ManageWorkersScreen() {
                   ))}
                 </Menu>
 
-                {(formError || storeError) && (
-                  <Text style={styles.errorText}>{formError || storeError}</Text>
-                )}
+                {formError ? (
+                  <Text style={styles.errorText}>{formError}</Text>
+                ) : null}
+                {storeError ? (
+                  <Text style={styles.errorText}>{storeError}</Text>
+                ) : null}
 
                 <Button
                   mode="contained"
@@ -313,6 +418,23 @@ const styles = StyleSheet.create({
   list: {
     padding: 16,
     paddingBottom: 24,
+  },
+  contextCard: {
+    backgroundColor: COLORS.surface,
+    borderRadius: 12,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  contextTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: COLORS.foreground,
+  },
+  contextMeta: {
+    marginTop: 4,
+    fontSize: 13,
+    color: COLORS.textSecondary,
   },
   formCard: {
     backgroundColor: COLORS.surface,
@@ -379,12 +501,19 @@ const styles = StyleSheet.create({
   workerMeta: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: 2,
     marginTop: 4,
+    flexWrap: 'wrap',
   },
   workerMetaText: {
     fontSize: 12,
     color: COLORS.textSecondary,
+    flexShrink: 1,
+  },
+  inlineIconBtn: {
+    margin: 0,
+    width: 28,
+    height: 28,
   },
   workerActions: {
     flexDirection: 'row',

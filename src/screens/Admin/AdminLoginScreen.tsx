@@ -44,17 +44,17 @@ export default function AdminLoginScreen() {
   });
 
   useEffect(() => {
-    if (isAdmin) {
+    if (isAdmin && role) {
       if (role === 'worker') {
         navigation.navigate('WorkerDashboard');
       } else {
         navigation.navigate('AdminDashboard');
       }
-    } else {
+    } else if (!isAdmin) {
       reset();
       setShowPassword(false);
     }
-  }, [isAdmin]);
+  }, [isAdmin, role]);
 
   const onSubmit = async (data: LoginFormData) => {
     await login(data.email, data.password);

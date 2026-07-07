@@ -71,7 +71,7 @@ export default function AdminSignupScreen() {
           <Icon source="domain" size={64} color={COLORS.primary} />
           <Text style={styles.title}>Organization Signup</Text>
           <Text style={styles.subtitle}>
-            Create an account to manage your raffles
+            Create an account to manage your raffles. A super admin must approve your organization before you can create raffles.
           </Text>
         </View>
 

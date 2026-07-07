@@ -30,6 +30,7 @@ import TapToPayEducationScreen from '../screens/Admin/TapToPay/TapToPayEducation
 import PreviewRaffleScreen from '../screens/Admin/PreviewRaffle/PreviewRaffleScreen';
 import TapToPayOnboardingHost from '../components/TapToPayOnboardingHost';
 import ManageWorkersScreen from '../screens/Admin/Workers/ManageWorkersScreen';
+import ManageOrganizationsScreen from '../screens/Admin/Organizations/ManageOrganizationsScreen';
 import WorkerDashboardScreen from '../screens/Worker/WorkerDashboardScreen';
 import WorkerTicketsScreen from '../screens/Worker/WorkerTicketsScreen';
 
@@ -212,6 +213,11 @@ export default function AppNavigator() {
           name="ManageWorkers"
           component={ManageWorkersScreen}
           options={{ title: 'Manage Workers' }}
+        />
+        <Stack.Screen
+          name="ManageOrganizations"
+          component={ManageOrganizationsScreen}
+          options={{ title: 'Organizations' }}
         />
         <Stack.Screen
           name="WorkerDashboard"

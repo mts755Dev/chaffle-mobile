@@ -51,34 +51,58 @@ const US_STATES = [
 export default function EditRaffleScreen() {
   const navigation = useNavigation<NavigationProp>();
   const route = useRoute<EditRaffleRouteProp>();
-  const { id } = route.params;
+  const routeOrganizationId = route.params.organizationId;
 
-  const { fetchFormById, updateForm, currentForm, isLoading } = useRaffleStore();
-  const { role } = useAuthStore();
+  const { fetchFormById, updateForm, createForm, currentForm, isLoading, setCurrentForm } =
+    useRaffleStore();
+  const { role, organizationId: authOrganizationId } = useAuthStore();
   const isOrgAdmin = role === 'org_admin';
   const { pickImage, uploadImage, isUploading } = useImageUpload();
 
+  const [raffleId, setRaffleId] = useState<string | undefined>(route.params.id);
+  const [isCreateMode, setIsCreateMode] = useState(!route.params.id);
   const [form, setForm] = useState<Partial<DonationForm>>({});
   const [isSaving, setIsSaving] = useState(false);
   const [snackMessage, setSnackMessage] = useState('');
   const [isRefreshingStripe, setIsRefreshingStripe] = useState(false);
   const [isGeneratingSecureLink, setIsGeneratingSecureLink] = useState(false);
   const [stateMenuVisible, setStateMenuVisible] = useState(false);
+  const [returnToDashboardOnDismiss, setReturnToDashboardOnDismiss] = useState(false);
 
   // Validation errors
   const [errors, setErrors] = useState<Record<string, string>>({});
 
-  useEffect(() => {
-    loadRaffle();
-  }, [id]);
+  const createOrganizationId = isOrgAdmin
+    ? routeOrganizationId ?? authOrganizationId
+    : routeOrganizationId ?? null;
 
   useEffect(() => {
-    if (currentForm) {
+    navigation.setOptions({
+      title: isCreateMode ? 'Create Raffle' : 'Edit Raffle',
+    });
+  }, [isCreateMode, navigation]);
+
+  useEffect(() => {
+    if (route.params.id) {
+      setRaffleId(route.params.id);
+      setIsCreateMode(false);
+      void loadRaffle(route.params.id);
+      return;
+    }
+
+    setRaffleId(undefined);
+    setIsCreateMode(true);
+    setForm({});
+    setCurrentForm(null);
+  }, [route.params.id]);
+
+  useEffect(() => {
+    if (currentForm && currentForm.id === raffleId) {
       setForm(currentForm);
     }
-  }, [currentForm]);
+  }, [currentForm, raffleId]);
 
-  const loadRaffle = async () => {
+  const loadRaffle = async (id: string) => {
     await fetchFormById(id);
   };
 
@@ -107,18 +131,28 @@ export default function EditRaffleScreen() {
       return;
     }
 
+    const formData = {
+      title: form.title,
+      charity_info: form.charity_info,
+      rules: form.rules,
+      draw_date: form.draw_date,
+      raffleLocation: form.raffleLocation,
+      backgroundImage: form.backgroundImage,
+    };
+
     setIsSaving(true);
     try {
-      await updateForm({
-        id,
-        title: form.title,
-        charity_info: form.charity_info,
-        rules: form.rules,
-        draw_date: form.draw_date,
-        raffleLocation: form.raffleLocation,
-        backgroundImage: form.backgroundImage,
-      });
-      setSnackMessage('Raffle saved successfully!');
+      if (isCreateMode) {
+        await createForm(createOrganizationId, formData);
+        setReturnToDashboardOnDismiss(true);
+        setSnackMessage('Raffle created successfully!');
+      } else if (raffleId) {
+        await updateForm({
+          id: raffleId,
+          ...formData,
+        });
+        setSnackMessage('Raffle saved successfully!');
+      }
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Failed to save');
     } finally {
@@ -139,7 +173,8 @@ export default function EditRaffleScreen() {
 
   // Free ticket link — same as web
   const handleCopyFreeTicketLink = async () => {
-    const link = `${API_BASE_URL}/ticket/free/${id}`;
+    if (!raffleId) return;
+    const link = `${API_BASE_URL}/ticket/free/${raffleId}`;
     try {
       await Clipboard.setStringAsync(link);
       setSnackMessage('Free ticket link copied to clipboard!');
@@ -153,13 +188,14 @@ export default function EditRaffleScreen() {
   const isStripeLinked = stripeAccount?.charges_enabled;
 
   const handleGenerateSecureLink = async () => {
+    if (!raffleId) return;
     if (form.stripeAccount) {
       setSnackMessage('Stripe account is already linked');
       return;
     }
     setIsGeneratingSecureLink(true);
     try {
-      const uniqueRecord = await secureLinkApi.createUniqueRecord(id);
+      const uniqueRecord = await secureLinkApi.createUniqueRecord(raffleId);
       const url = `${API_BASE_URL}/stripe/account/${uniqueRecord.id}/link`;
       try {
         await Clipboard.setStringAsync(url);
@@ -175,19 +211,20 @@ export default function EditRaffleScreen() {
   };
 
   const handleRefreshStripeStatus = async () => {
+    if (!raffleId) return;
     if (!stripeAccount?.id) {
       setSnackMessage('No Stripe account found');
       return;
     }
     setIsRefreshingStripe(true);
     try {
-      const result = await stripeApi.refreshStripeAccountStatus(stripeAccount.id, id);
+      const result = await stripeApi.refreshStripeAccountStatus(stripeAccount.id, raffleId);
       setSnackMessage(
         result.charges_enabled
           ? 'Stripe account linked successfully!'
           : 'Account not yet fully linked',
       );
-      loadRaffle();
+      loadRaffle(raffleId);
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Failed to refresh status');
     } finally {
@@ -195,7 +232,16 @@ export default function EditRaffleScreen() {
     }
   };
 
-  if (isLoading && !currentForm) {
+  const handleSnackDismiss = () => {
+    const shouldReturn = returnToDashboardOnDismiss;
+    setSnackMessage('');
+    setReturnToDashboardOnDismiss(false);
+    if (shouldReturn) {
+      navigation.navigate('AdminDashboard');
+    }
+  };
+
+  if (!isCreateMode && isLoading && !currentForm) {
     return <LoadingScreen message="Loading raffle..." />;
   }
 
@@ -212,19 +258,21 @@ export default function EditRaffleScreen() {
         {/* Header — matches web: "Raffle Information" + Preview link */}
         <View style={styles.header}>
           <Text style={styles.pageTitle}>Raffle Information</Text>
-          <Button
-            mode="text"
-            icon="eye"
-            textColor={COLORS.primary}
-            compact
-            onPress={() => navigation.navigate('PreviewRaffle', { id })}
-          >
-            Preview
-          </Button>
+          {!isCreateMode && raffleId ? (
+            <Button
+              mode="text"
+              icon="eye"
+              textColor={COLORS.primary}
+              compact
+              onPress={() => navigation.navigate('PreviewRaffle', { id: raffleId })}
+            >
+              Preview
+            </Button>
+          ) : null}
         </View>
 
         {/* Stripe Connect Section — hidden for org_admin (managed at org level) */}
-        {!isOrgAdmin && (
+        {!isOrgAdmin && !isCreateMode && (
           <Card style={styles.card}>
             <Card.Content>
               <Text style={styles.cardTitle}>Stripe Connect</Text>
@@ -391,18 +439,21 @@ export default function EditRaffleScreen() {
 
             <Divider style={styles.sectionDivider} />
 
-            {/* Free Ticket Link — matches web */}
-            <Button
-              mode="contained"
-              onPress={handleCopyFreeTicketLink}
-              icon="ticket-percent"
-              style={styles.freeTicketButton}
-              buttonColor={COLORS.primary}
-            >
-              Generate a free ticket link
-            </Button>
+            {!isCreateMode && raffleId ? (
+              <>
+                <Button
+                  mode="contained"
+                  onPress={handleCopyFreeTicketLink}
+                  icon="ticket-percent"
+                  style={styles.freeTicketButton}
+                  buttonColor={COLORS.primary}
+                >
+                  Generate a free ticket link
+                </Button>
 
-            <Divider style={styles.sectionDivider} />
+                <Divider style={styles.sectionDivider} />
+              </>
+            ) : null}
 
             {/* Rules and Regulation */}
             <TextInput
@@ -472,11 +523,11 @@ export default function EditRaffleScreen() {
 
       <Snackbar
         visible={!!snackMessage}
-        onDismiss={() => setSnackMessage('')}
-        duration={3000}
+        onDismiss={handleSnackDismiss}
+        duration={returnToDashboardOnDismiss ? 2000 : 3000}
         action={{
           label: 'OK',
-          onPress: () => setSnackMessage(''),
+          onPress: handleSnackDismiss,
         }}
       >
         {snackMessage}

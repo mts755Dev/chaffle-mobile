@@ -17,7 +17,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.chaffleorg.chaffle",
-      "buildNumber": "3",
+      "buildNumber": "5",
       "entitlements": {
         "com.apple.developer.proximity-reader.payment.acceptance": true
       },

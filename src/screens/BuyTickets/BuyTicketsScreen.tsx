@@ -35,6 +35,7 @@ import { formatCurrency, getPublicIp } from '../../utils';
 import { useAuthStore } from '../../store/authStore';
 import { blockWorkerFromForeignRaffle } from '../../utils/workerAccess';
 import TicketTierSelector from '../../components/TicketTierSelector';
+import PaymentChargeSummary from '../../components/PaymentChargeSummary';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 type BuyTicketsRouteProp = RouteProp<RootStackParamList, 'BuyTickets'>;
@@ -280,10 +281,11 @@ function BuyTicketsContent() {
         {selectedPrice && (
           <Card style={styles.summaryCard}>
             <Card.Content>
-              <Text style={styles.summaryText}>
-                {formatCurrency(selectedPrice)} → {selectedQuantity}{' '}
-                {selectedQuantity === 1 ? 'ticket' : 'tickets'}
-              </Text>
+              <PaymentChargeSummary
+                baseAmount={selectedPrice}
+                includePlatformFee={donateExtra}
+                channel="online"
+              />
             </Card.Content>
           </Card>
         )}

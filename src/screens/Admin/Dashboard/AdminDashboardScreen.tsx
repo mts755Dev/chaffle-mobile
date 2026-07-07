@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useLayoutEffect } from 'react';
 import {
   View,
   StyleSheet,
@@ -17,6 +17,7 @@ import {
   FAB,
   Divider,
   IconButton,
+  Icon,
 } from 'react-native-paper';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -35,13 +36,18 @@ import {
   showTapToPayAdminRequiredAlert,
   usesOrganizationStripe,
 } from '../../../utils/tapToPayAccess';
+import {
+  canOrgCreateRaffles,
+  getOrgApprovalBannerMessage,
+} from '../../../utils/orgAccess';
+import { formatOrganizationLabel } from '../../../utils/orgDisplay';
+import { organizationApi } from '../../../services/api/organizationApi';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 export default function AdminDashboardScreen() {
   const navigation = useNavigation<NavigationProp>();
   const {
-    logout,
     isAdmin,
     canManageTapToPay,
     role,
@@ -49,8 +55,10 @@ export default function AdminDashboardScreen() {
     organizationName,
     orgStripeConnected,
     orgStripeAccountId,
+    orgApprovalStatus,
     connectStripe,
     refreshStripeStatus,
+    refreshOrgState,
   } = useAuthStore();
   const {
     forms,
@@ -61,19 +69,30 @@ export default function AdminDashboardScreen() {
     fetchForms,
     fetchTicketTotals,
     fetchCompletedRaffleIds,
-    createForm,
   } = useRaffleStore();
 
   const isOrgAdmin = role === 'org_admin';
+  const isSuperAdmin = role === 'super_admin';
+  const canCreateRaffles = canOrgCreateRaffles(role, orgApprovalStatus);
+  const approvalBannerMessage = isOrgAdmin
+    ? getOrgApprovalBannerMessage(orgApprovalStatus)
+    : null;
+
+  useLayoutEffect(() => {
+    navigation.setOptions({ headerRight: undefined });
+  }, [navigation]);
 
   const [refreshing, setRefreshing] = useState(false);
-  const [isCreating, setIsCreating] = useState(false);
   const [filterText, setFilterText] = useState('');
   const [isConnectingStripe, setIsConnectingStripe] = useState(false);
   const [isRefreshingStripe, setIsRefreshingStripe] = useState(false);
+  const [pendingOrgCount, setPendingOrgCount] = useState(0);
 
   const showTapToPayFeatures =
     Platform.OS === 'ios' && canSetupTapToPayOnDevice(isAdmin, role);
+
+  const authReady = role !== null;
+  const orgContextReady = !isOrgAdmin || !!organizationId;
 
   // Filter forms by title
   const filteredForms = filterText.trim()
@@ -82,28 +101,53 @@ export default function AdminDashboardScreen() {
       )
     : forms;
 
-  // Load data from DB on screen focus
-  useFocusEffect(
-    useCallback(() => {
-      loadData();
-    }, []),
-  );
+  const loadData = useCallback(async () => {
+    if (role === null) return;
+    if (role === 'org_admin' && !organizationId) {
+      await refreshOrgState();
+      return;
+    }
 
-  const openTapToPaySettings = () => {
-    navigation.navigate('AdminTapToPay', {});
-  };
+    if (role === 'org_admin') {
+      await refreshOrgState();
+    }
+    if (role === 'super_admin') {
+      try {
+        const count = await organizationApi.countPendingOrganizations();
+        setPendingOrgCount(count);
+      } catch {
+        setPendingOrgCount(0);
+      }
+    }
 
-  const loadData = async () => {
-    const orgId = isOrgAdmin ? organizationId : undefined;
+    const orgId = role === 'org_admin' ? organizationId : undefined;
     await fetchForms(orgId);
     const { forms: loadedForms } = useRaffleStore.getState();
-    const raffleIds = isOrgAdmin
+    const raffleIds = role === 'org_admin'
       ? loadedForms.map((f) => f.id)
       : undefined;
     await Promise.all([
       fetchTicketTotals(undefined, raffleIds),
       fetchCompletedRaffleIds(raffleIds),
     ]);
+  }, [
+    role,
+    organizationId,
+    refreshOrgState,
+    fetchForms,
+    fetchTicketTotals,
+    fetchCompletedRaffleIds,
+  ]);
+
+  // Load data from DB on screen focus
+  useFocusEffect(
+    useCallback(() => {
+      void loadData();
+    }, [loadData]),
+  );
+
+  const openTapToPaySettings = () => {
+    navigation.navigate('AdminTapToPay', {});
   };
 
   const onRefresh = async () => {
@@ -112,29 +156,19 @@ export default function AdminDashboardScreen() {
     setRefreshing(false);
   };
 
-  const handleCreateRaffle = async () => {
-    setIsCreating(true);
-    try {
-      const newForm = await createForm(isOrgAdmin ? organizationId : undefined);
-      navigation.navigate('EditRaffle', { id: newForm.id });
-    } catch (err: any) {
-      Alert.alert('Error', err.message || 'Failed to create raffle');
-    } finally {
-      setIsCreating(false);
+  const handleCreateRaffle = () => {
+    if (!canCreateRaffles) {
+      Alert.alert(
+        'Approval required',
+        approvalBannerMessage ||
+          'Your organization must be approved before you can create raffles.',
+      );
+      return;
     }
-  };
 
-  const handleLogout = () => {
-    Alert.alert('Logout', 'Are you sure you want to logout?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Logout',
-        onPress: async () => {
-          await logout();
-          navigation.navigate('MainTabs');
-        },
-      },
-    ]);
+    navigation.navigate('EditRaffle', {
+      organizationId: isOrgAdmin ? organizationId : undefined,
+    });
   };
 
   const handleConnectStripe = async () => {
@@ -174,42 +208,59 @@ export default function AdminDashboardScreen() {
     return completedRaffleIds.includes(raffleId);
   };
 
+  if (!authReady || !orgContextReady) {
+    return <LoadingScreen message="Loading dashboard..." />;
+  }
+
   if (isLoading && forms.length === 0) {
     return <LoadingScreen message="Loading dashboard..." />;
   }
 
   return (
     <View style={styles.container}>
-      {/* Top Actions */}
-      <View style={styles.topActions}>
-        <Button
-          mode="outlined"
+      {/* Quick navigation */}
+      <View style={styles.navTabs}>
+        {isSuperAdmin ? (
+          <TouchableOpacity
+            style={styles.navTab}
+            activeOpacity={0.7}
+            onPress={() => navigation.navigate('ManageOrganizations')}
+          >
+            <View style={styles.navTabIconWrap}>
+              <Icon source="domain" size={22} color={COLORS.primary} />
+              {pendingOrgCount > 0 ? (
+                <View style={styles.navBadge}>
+                  <Text style={styles.navBadgeText}>
+                    {pendingOrgCount > 9 ? '9+' : pendingOrgCount}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+            <Text style={styles.navTabLabel} numberOfLines={1}>
+              Organizations
+            </Text>
+          </TouchableOpacity>
+        ) : null}
+        <TouchableOpacity
+          style={styles.navTab}
+          activeOpacity={0.7}
           onPress={() => navigation.navigate('AdminTickets')}
-          icon="ticket"
-          compact
-          style={styles.topButton}
         >
-          Tickets
-        </Button>
-        <Button
-          mode="outlined"
+          <Icon source="ticket-confirmation-outline" size={22} color={COLORS.primary} />
+          <Text style={styles.navTabLabel} numberOfLines={1}>
+            Tickets
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.navTab}
+          activeOpacity={0.7}
           onPress={() => navigation.navigate('AdminWinners')}
-          icon="trophy"
-          compact
-          style={styles.topButton}
         >
-          Winners
-        </Button>
-        <Button
-          mode="outlined"
-          onPress={handleLogout}
-          icon="logout"
-          compact
-          style={styles.topButton}
-          textColor={COLORS.error}
-        >
-          Logout
-        </Button>
+          <Icon source="trophy-outline" size={22} color={COLORS.primary} />
+          <Text style={styles.navTabLabel} numberOfLines={1}>
+            Winners
+          </Text>
+        </TouchableOpacity>
       </View>
 
       {isOrgAdmin && (
@@ -280,6 +331,34 @@ export default function AdminDashboardScreen() {
             {organizationName}
           </Text>
         )}
+
+        {approvalBannerMessage ? (
+          <Card style={styles.approvalBannerCard}>
+            <Card.Content style={styles.approvalBannerContent}>
+              <Chip
+                compact
+                icon={
+                  orgApprovalStatus === 'rejected'
+                    ? 'close-circle-outline'
+                    : 'clock-outline'
+                }
+                style={
+                  orgApprovalStatus === 'rejected'
+                    ? styles.approvalRejectedChip
+                    : styles.approvalPendingChip
+                }
+                textStyle={
+                  orgApprovalStatus === 'rejected'
+                    ? styles.approvalRejectedChipText
+                    : styles.approvalPendingChipText
+                }
+              >
+                {orgApprovalStatus === 'rejected' ? 'Not approved' : 'Pending approval'}
+              </Chip>
+              <Text style={styles.approvalBannerText}>{approvalBannerMessage}</Text>
+            </Card.Content>
+          </Card>
+        ) : null}
 
         {showTapToPayFeatures && (
           <TouchableOpacity
@@ -373,6 +452,21 @@ export default function AdminDashboardScreen() {
                     ID: {form.id}
                   </Text>
 
+                  {isSuperAdmin ? (
+                    <Text
+                      style={[
+                        styles.raffleOrgLabel,
+                        form.organization_approval_status === 'terminated' &&
+                          styles.raffleOrgLabelTerminated,
+                      ]}
+                    >
+                      {formatOrganizationLabel(
+                        form.organization_name,
+                        form.organization_approval_status,
+                      )}
+                    </Text>
+                  ) : null}
+
                   <Divider style={styles.divider} />
 
                   {/* Total Amount + Tickets Sold + Actions */}
@@ -408,7 +502,14 @@ export default function AdminDashboardScreen() {
                         icon="account-group"
                         iconColor={COLORS.primary}
                         size={20}
-                        onPress={() => navigation.navigate('ManageWorkers', { raffleId: form.id })}
+                        onPress={() =>
+                          navigation.navigate('ManageWorkers', {
+                            raffleId: form.id,
+                            organizationId: form.organization_id,
+                            raffleTitle: form.title,
+                            organizationName: form.organization_name,
+                          })
+                        }
                         style={styles.iconAction}
                       />
                       {hasStripe && !completed ? (
@@ -457,14 +558,14 @@ export default function AdminDashboardScreen() {
         })}
       </ScrollView>
 
-      <FAB
-        icon="plus"
-        label="Create Raffle"
-        style={styles.fab}
-        onPress={handleCreateRaffle}
-        loading={isCreating}
-        disabled={isCreating}
-      />
+      {canCreateRaffles ? (
+        <FAB
+          icon="plus"
+          label="Create Raffle"
+          style={styles.fab}
+          onPress={handleCreateRaffle}
+        />
+      ) : null}
 
     </View>
   );
@@ -480,17 +581,47 @@ const styles = StyleSheet.create({
     padding: 16,
     paddingBottom: 80,
   },
-  topActions: {
+  navTabs: {
     flexDirection: 'row',
-    padding: 12,
-    gap: 8,
     backgroundColor: COLORS.surface,
     borderBottomWidth: 1,
     borderBottomColor: COLORS.border,
+    paddingHorizontal: 8,
+    paddingVertical: 10,
   },
-  topButton: {
+  navTab: {
     flex: 1,
-    borderColor: COLORS.border,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    paddingVertical: 6,
+    paddingHorizontal: 4,
+  },
+  navTabIconWrap: {
+    position: 'relative',
+  },
+  navTabLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: COLORS.foreground,
+    textAlign: 'center',
+  },
+  navBadge: {
+    position: 'absolute',
+    top: -4,
+    right: -10,
+    minWidth: 16,
+    height: 16,
+    borderRadius: 8,
+    backgroundColor: COLORS.error,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 4,
+  },
+  navBadgeText: {
+    color: COLORS.white,
+    fontSize: 10,
+    fontWeight: '700',
   },
   stripeBar: {
     flexDirection: 'row',
@@ -527,6 +658,39 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: COLORS.textSecondary,
     marginBottom: 4,
+  },
+  approvalBannerCard: {
+    backgroundColor: '#FFFBEB',
+    borderRadius: 12,
+    marginBottom: 16,
+    borderWidth: 1,
+    borderColor: '#FDE68A',
+  },
+  approvalBannerContent: {
+    gap: 10,
+  },
+  approvalPendingChip: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#FEF3C7',
+  },
+  approvalPendingChipText: {
+    color: '#92400E',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  approvalRejectedChip: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#FEE2E2',
+  },
+  approvalRejectedChipText: {
+    color: '#991B1B',
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  approvalBannerText: {
+    fontSize: 13,
+    lineHeight: 20,
+    color: COLORS.textSecondary,
   },
   sectionTitle: {
     fontSize: 20,
@@ -599,6 +763,16 @@ const styles = StyleSheet.create({
     color: COLORS.textLight,
     fontFamily: 'monospace',
     marginTop: 4,
+  },
+  raffleOrgLabel: {
+    fontSize: 12,
+    color: COLORS.textSecondary,
+    marginTop: 4,
+    fontWeight: '500',
+  },
+  raffleOrgLabelTerminated: {
+    color: '#6B7280',
+    fontStyle: 'italic',
   },
   completedChip: {
     backgroundColor: '#e8f5e9',

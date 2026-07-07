@@ -40,6 +40,8 @@ import { useStripeReader } from '../../../hooks/useStripeReader';
 import ReaderConnectionStatus from '../../../components/ReaderConnectionStatus';
 import PaymentStatusOverlay from '../../../components/PaymentStatus';
 import TapToPayCheckoutButton from '../../../components/TapToPayCheckoutButton';
+import PaymentChargeSummary from '../../../components/PaymentChargeSummary';
+import { chargeTotalDollars } from '../../../utils/paymentFees';
 import TapToPayIcon from '../../../components/TapToPayIcon';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -315,6 +317,12 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
   const showCheckoutFooter =
     paymentStatus === 'idle' && currentStep === 'details' && !!selectedTier;
   const paymentActive = paymentStatus !== 'idle';
+  const customerChargeTotal = selectedTier
+    ? chargeTotalDollars(selectedTier.price, {
+        includePlatformFee: platformFee,
+        channel: 'terminal',
+      })
+    : 0;
 
   return (
     <KeyboardAvoidingView
@@ -463,12 +471,12 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
               {/* Selected ticket summary */}
               {selectedTier && (
                 <View style={styles.selectedSummary}>
-                  <Text style={styles.selectedLabel}>Selected:</Text>
-                  <Text style={styles.selectedValue}>
-                    {selectedTier.quantity} Ticket
-                    {selectedTier.quantity > 1 ? 's' : ''} –{' '}
-                    {formatCurrency(selectedTier.price)}
-                  </Text>
+                  <PaymentChargeSummary
+                    baseAmount={selectedTier.price}
+                    includePlatformFee={platformFee}
+                    channel="terminal"
+                    compact
+                  />
                 </View>
               )}
 
@@ -613,7 +621,7 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
 
       {showCheckoutFooter && (
         <TapToPayCheckoutButton
-          amountFormatted={formatCurrency(selectedTier.price)}
+          amountFormatted={formatCurrency(customerChargeTotal)}
           onPress={handleCollectPayment}
           loading={checkoutBusy}
         />

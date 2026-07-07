@@ -1,23 +1,35 @@
 // ── Auth / Role types ────────────────────────────────────────────
 export type AdminRole = 'super_admin' | 'org_admin' | 'worker';
 
+export type OrgApprovalStatus = 'pending' | 'approved' | 'rejected' | 'terminated';
+
 export interface Organization {
   id: string;
   name: string;
   owner_id: string;
+  contact_email?: string | null;
+  approval_status?: OrgApprovalStatus;
+  approved_at?: string | null;
+  approved_by?: string | null;
+  terminated_at?: string | null;
+  terminated_by?: string | null;
   created_at: string;
   updated_at: string;
 }
+
+export type OrganizationRecord = Organization;
 
 export interface Worker {
   id: string;
   email: string;
   raffle_id: string;
-  organization_id: string;
+  organization_id: string | null;
   created_by: string;
   user_id: string | null;
   expires_at: string;
   created_at: string;
+  /** Plaintext login password stored for admin/org reference at creation time. */
+  login_password?: string | null;
 }
 
 // Database model types matching the Prisma schema
@@ -59,6 +71,8 @@ export interface DonationForm {
   min_ticket_price: number | null;
   raffleLocation: string | null;
   organization_id: string | null;
+  organization_name?: string | null;
+  organization_approval_status?: OrgApprovalStatus | null;
   secure_link?: SecureLink | null;
   _count?: {
     tickets: number;
@@ -175,7 +189,7 @@ export type RootStackParamList = {
   AdminLogin: undefined;
   AdminSignup: undefined;
   AdminDashboard: undefined;
-  EditRaffle: { id: string };
+  EditRaffle: { id?: string; organizationId?: string | null };
   PreviewRaffle: { id: string };
   AdminTickets: undefined;
   AdminWinners: undefined;
@@ -183,7 +197,13 @@ export type RootStackParamList = {
   AdminTapToPay: { startSetup?: boolean };
   TapToPayEducation: undefined;
   StripeConnectLink: { raffleId: string };
-  ManageWorkers: { raffleId: string };
+  ManageWorkers: {
+    raffleId: string;
+    organizationId?: string | null;
+    raffleTitle?: string | null;
+    organizationName?: string | null;
+  };
+  ManageOrganizations: undefined;
   WorkerDashboard: undefined;
   WorkerTickets: undefined;
 };

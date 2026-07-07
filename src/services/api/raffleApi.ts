@@ -1,5 +1,6 @@
 import apiClient from './client';
 import { supabase } from '../supabase/client';
+import { organizationApi } from './organizationApi';
 import {
   DonationForm,
   StripeAccount,
@@ -8,6 +9,7 @@ import {
   CreateTicketPayload,
   UpdateFormPayload,
   ContactFormData,
+  OrgApprovalStatus,
 } from '../../types';
 
 /**
@@ -40,6 +42,54 @@ async function fetchOrgStripeJson(organizationId: string): Promise<StripeAccount
   return (data?.stripe_account_json as StripeAccount) ?? null;
 }
 
+async function fetchOrgDetails(
+  organizationIds: string[],
+): Promise<Record<string, { name: string; approval_status: OrgApprovalStatus }>> {
+  if (organizationIds.length === 0) return {};
+
+  const { data } = await supabase
+    .from('organization')
+    .select('id, name, approval_status')
+    .in('id', organizationIds);
+
+  const map: Record<string, { name: string; approval_status: OrgApprovalStatus }> = {};
+  for (const org of data ?? []) {
+    map[org.id] = {
+      name: org.name,
+      approval_status: (org.approval_status as OrgApprovalStatus) ?? 'pending',
+    };
+  }
+
+  const missingIds = organizationIds.filter((id) => !map[id]);
+  if (missingIds.length > 0) {
+    try {
+      const orgs = await organizationApi.getOrganizationsByIds(missingIds);
+      for (const org of orgs) {
+        map[org.id] = {
+          name: org.name,
+          approval_status: (org.approval_status as OrgApprovalStatus) ?? 'pending',
+        };
+      }
+    } catch {
+      try {
+        const allOrgs = await organizationApi.listOrganizations('all');
+        for (const org of allOrgs) {
+          if (missingIds.includes(org.id)) {
+            map[org.id] = {
+              name: org.name,
+              approval_status: (org.approval_status as OrgApprovalStatus) ?? 'pending',
+            };
+          }
+        }
+      } catch {
+        // Super-admin edge function may be unavailable.
+      }
+    }
+  }
+
+  return map;
+}
+
 export const raffleApi = {
   // Get all donation forms (admin) — optionally filtered by organization
   getDonationForms: async (organizationId?: string | null): Promise<DonationForm[]> => {
@@ -62,19 +112,25 @@ export const raffleApi = {
     // Org-level stripe inheritance: fetch once per unique org
     const orgIds = [...new Set(forms.map((f) => f.organization_id).filter(Boolean))] as string[];
     const orgStripeMap: Record<string, StripeAccount | null> = {};
+    const orgDetailMap = await fetchOrgDetails(orgIds);
     await Promise.all(
       orgIds.map(async (oid) => {
         orgStripeMap[oid] = await fetchOrgStripeJson(oid);
       }),
     );
 
-    return forms.map((f) => ({
-      ...f,
-      stripeAccount: getEffectiveStripeAccount(
-        f,
-        f.organization_id ? orgStripeMap[f.organization_id] : null,
-      ),
-    }));
+    return forms.map((f) => {
+      const orgDetail = f.organization_id ? orgDetailMap[f.organization_id] : undefined;
+      return {
+        ...f,
+        organization_name: orgDetail?.name ?? null,
+        organization_approval_status: orgDetail?.approval_status ?? null,
+        stripeAccount: getEffectiveStripeAccount(
+          f,
+          f.organization_id ? orgStripeMap[f.organization_id] : null,
+        ),
+      };
+    });
   },
 
   // Get a single donation form by ID
@@ -87,9 +143,16 @@ export const raffleApi = {
     if (error) return null;
 
     const form = data as DonationForm;
-    if (form.organization_id && !form.stripeAccount?.id) {
-      const orgStripe = await fetchOrgStripeJson(form.organization_id);
-      form.stripeAccount = getEffectiveStripeAccount(form, orgStripe);
+    if (form.organization_id) {
+      const orgDetailMap = await fetchOrgDetails([form.organization_id]);
+      const orgDetail = orgDetailMap[form.organization_id];
+      form.organization_name = orgDetail?.name ?? null;
+      form.organization_approval_status = orgDetail?.approval_status ?? null;
+
+      if (!form.stripeAccount?.id) {
+        const orgStripe = await fetchOrgStripeJson(form.organization_id);
+        form.stripeAccount = getEffectiveStripeAccount(form, orgStripe);
+      }
     }
     return form;
   },
@@ -125,18 +188,36 @@ export const raffleApi = {
   },
 
   // Create donation form (admin) — org admins pass their organization_id
-  createDonationForm: async (organizationId?: string | null): Promise<DonationForm> => {
-    const insertPayload: Record<string, any> = {};
+  createDonationForm: async (
+    organizationId?: string | null,
+    data?: Omit<UpdateFormPayload, 'id'>,
+  ): Promise<DonationForm> => {
+    if (organizationId) {
+      const { data: org, error: orgError } = await supabase
+        .from('organization')
+        .select('approval_status')
+        .eq('id', organizationId)
+        .single();
+
+      if (orgError) throw orgError;
+      if (org?.approval_status !== 'approved') {
+        throw new Error(
+          'Your organization must be approved before you can create raffles.',
+        );
+      }
+    }
+
+    const insertPayload: Record<string, unknown> = { ...(data ?? {}) };
     if (organizationId) {
       insertPayload.organization_id = organizationId;
     }
-    const { data, error } = await supabase
+    const { data: created, error } = await supabase
       .from('donation_form')
       .insert(insertPayload)
       .select()
       .single();
     if (error) throw error;
-    return data;
+    return created;
   },
 
   // Update donation form (admin)

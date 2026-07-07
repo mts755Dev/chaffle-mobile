@@ -1,10 +1,13 @@
 import { create } from 'zustand';
 import { supabase } from '../services/supabase/client';
 import { clearTapToPayTermsSession } from '../services/tapToPayTermsState';
-import { workerApi } from '../services/api/workerApi';
-import { workerDuplicateEmailMessage } from '../utils/workerEmail';
+import { useRaffleStore } from './raffleStore';
+import { deriveAdminRole, isSuperAdminUser } from '../utils/authRoles';
 import type { User, Session } from '@supabase/supabase-js';
-import type { AdminRole } from '../types';
+import type { AdminRole, OrgApprovalStatus } from '../types';
+
+/** Prevents onAuthStateChange from overwriting login/signup state mid-flow. */
+let authFlowInProgress = false;
 
 /** Workers may use the app but cannot accept Tap to Pay Terms (3.8 / 3.8.1). */
 function resolveCanManageTapToPay(user: User | null): boolean {
@@ -28,40 +31,92 @@ interface AuthState {
   raffleId: string | null;
   orgStripeAccountId: string | null;
   orgStripeConnected: boolean;
+  orgApprovalStatus: OrgApprovalStatus | null;
   error: string | null;
 
   initialize: () => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   signup: (email: string, password: string, organizationName: string) => Promise<void>;
-  createWorker: (email: string, password: string, raffleId: string, organizationId: string, durationHours: number) => Promise<void>;
+  createWorker: (email: string, password: string, raffleId: string, organizationId: string | null, durationHours: number) => Promise<void>;
   connectStripe: () => Promise<string>;
   refreshStripeStatus: () => Promise<{ charges_enabled: boolean }>;
+  refreshOrgState: () => Promise<void>;
   logout: () => Promise<void>;
   clearError: () => void;
 }
 
+function readMetadataRole(user: User | null): string | undefined {
+  if (!user) return undefined;
+  return (
+    (user.app_metadata?.role as string | undefined) ??
+    (user.user_metadata?.role as string | undefined)
+  );
+}
+
 function deriveRole(user: User | null): AdminRole | null {
-  if (!user) return null;
-  const metaRole = user.user_metadata?.role;
-  if (metaRole === 'admin') return 'super_admin';
-  if (metaRole === 'org_admin') return 'org_admin';
-  if (metaRole === 'worker') return 'worker';
-  return 'super_admin';
+  return deriveAdminRole(user);
 }
 
 function deriveOrgId(user: User | null): string | null {
   if (!user) return null;
-  return user.user_metadata?.organization_id || null;
+  return (
+    (user.user_metadata?.organization_id as string | undefined) ??
+    (user.app_metadata?.organization_id as string | undefined) ??
+    null
+  );
 }
 
 function deriveOrgName(user: User | null): string | null {
   if (!user) return null;
-  return user.user_metadata?.organization_name || null;
+  return (
+    (user.user_metadata?.organization_name as string | undefined) ??
+    (user.app_metadata?.organization_name as string | undefined) ??
+    null
+  );
 }
 
 function deriveRaffleId(user: User | null): string | null {
   if (!user) return null;
-  return user.user_metadata?.raffle_id || null;
+  return (
+    (user.user_metadata?.raffle_id as string | undefined) ??
+    (user.app_metadata?.raffle_id as string | undefined) ??
+    null
+  );
+}
+
+async function refreshAuthUser(
+  fallbackUser: User,
+  fallbackSession: Session | null,
+): Promise<{ user: User; session: Session | null }> {
+  const { data, error } = await supabase.auth.refreshSession();
+  if (error || !data.session?.user) {
+    return { user: fallbackUser, session: fallbackSession };
+  }
+  return { user: data.session.user, session: data.session };
+}
+
+/** Legacy web super admins may lack role=admin in JWT; patch so RLS policies work. */
+async function ensureSuperAdminJwtMetadata(
+  user: User,
+  session: Session | null,
+): Promise<{ user: User; session: Session | null }> {
+  if (!isSuperAdminUser(user)) {
+    return { user, session };
+  }
+
+  if (readMetadataRole(user) === 'admin') {
+    return { user, session };
+  }
+
+  const { error } = await supabase.auth.updateUser({
+    data: { role: 'admin' },
+  });
+
+  if (error) {
+    return { user, session };
+  }
+
+  return refreshAuthUser(user, session);
 }
 
 function isWorkerExpired(user: User | null): boolean {
@@ -71,21 +126,25 @@ function isWorkerExpired(user: User | null): boolean {
   return new Date(expiresAt) < new Date();
 }
 
-async function fetchOrgStripeState(orgId: string): Promise<{
+async function fetchOrgState(orgId: string): Promise<{
   id: string | null;
   connected: boolean;
   name: string | null;
+  approvalStatus: OrgApprovalStatus | null;
 }> {
   const { data } = await supabase
     .from('organization')
-    .select('stripe_account_id, stripe_account_json, name')
+    .select('stripe_account_id, stripe_account_json, name, approval_status')
     .eq('id', orgId)
     .single();
-  if (!data) return { id: null, connected: false, name: null };
+  if (!data) {
+    return { id: null, connected: false, name: null, approvalStatus: null };
+  }
   return {
     id: data.stripe_account_id ?? null,
     connected: !!(data.stripe_account_json as any)?.charges_enabled,
     name: data.name ?? null,
+    approvalStatus: (data.approval_status as OrgApprovalStatus) ?? 'pending',
   };
 }
 
@@ -98,19 +157,40 @@ function shouldLoadOrgStripe(user: User | null): boolean {
 function buildAuthPatch(
   user: User | null,
   session: Session | null,
-  stripeState: { id: string | null; connected: boolean; name: string | null },
+  orgState: {
+    id: string | null;
+    connected: boolean;
+    name: string | null;
+    approvalStatus: OrgApprovalStatus | null;
+  },
+  preserve?: {
+    role?: AdminRole | null;
+    organizationId?: string | null;
+    organizationName?: string | null;
+    orgApprovalStatus?: OrgApprovalStatus | null;
+  },
 ) {
+  const role = deriveRole(user) ?? preserve?.role ?? null;
+  const organizationId = deriveOrgId(user) ?? preserve?.organizationId ?? null;
+  const organizationName =
+    deriveOrgName(user) ?? preserve?.organizationName ?? orgState.name;
+  const orgApprovalStatus =
+    role === 'org_admin'
+      ? orgState.approvalStatus ?? preserve?.orgApprovalStatus ?? null
+      : null;
+
   return {
     user,
     session,
-    isAdmin: !!user,
+    isAdmin: !!user && role !== null,
     canManageTapToPay: resolveCanManageTapToPay(user),
-    role: deriveRole(user),
-    organizationId: deriveOrgId(user),
-    organizationName: deriveOrgName(user) ?? stripeState.name,
+    role,
+    organizationId,
+    organizationName,
     raffleId: deriveRaffleId(user),
-    orgStripeAccountId: stripeState.id,
-    orgStripeConnected: stripeState.connected,
+    orgStripeAccountId: orgState.id,
+    orgStripeConnected: orgState.connected,
+    orgApprovalStatus,
   };
 }
 
@@ -126,6 +206,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   raffleId: null,
   orgStripeAccountId: null,
   orgStripeConnected: false,
+  orgApprovalStatus: null,
   error: null,
 
   initialize: async () => {
@@ -136,7 +217,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         return;
       }
       if (data?.session) {
-        const user = data.session.user;
+        let user = data.session.user;
+        let session = data.session;
 
         if (deriveRole(user) === 'worker' && isWorkerExpired(user)) {
           await supabase.auth.signOut();
@@ -144,14 +226,25 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           return;
         }
 
+        const synced = await ensureSuperAdminJwtMetadata(user, session);
+        user = synced.user;
+        session = synced.session ?? session;
+
         const orgId = deriveOrgId(user);
-        let stripeState = { id: null as string | null, connected: false, name: null as string | null };
+        let orgState = {
+          id: null as string | null,
+          connected: false,
+          name: null as string | null,
+          approvalStatus: null as OrgApprovalStatus | null,
+        };
         if (shouldLoadOrgStripe(user) && orgId) {
-          stripeState = await fetchOrgStripeState(orgId);
+          orgState = await fetchOrgState(orgId);
+        } else if (deriveRole(user) === 'org_admin' && orgId) {
+          orgState = await fetchOrgState(orgId);
         }
 
         set({
-          ...buildAuthPatch(user, data.session, stripeState),
+          ...buildAuthPatch(user, session, orgState),
           isLoading: false,
         });
       } else {
@@ -160,10 +253,14 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
       supabase.auth.onAuthStateChange((_event, session) => {
         void (async () => {
+          if (authFlowInProgress) return;
+
+          const prev = get();
           const user = session?.user ?? null;
 
           if (user && deriveRole(user) === 'worker' && isWorkerExpired(user)) {
             await supabase.auth.signOut();
+            useRaffleStore.getState().reset();
             set({
               user: null,
               session: null,
@@ -175,18 +272,37 @@ export const useAuthStore = create<AuthState>((set, get) => ({
               raffleId: null,
               orgStripeAccountId: null,
               orgStripeConnected: false,
+              orgApprovalStatus: null,
               error: 'Your worker account has expired',
             });
             return;
           }
 
-          const orgId = deriveOrgId(user);
-          let stripeState = { id: null as string | null, connected: false, name: null as string | null };
-          if (user && shouldLoadOrgStripe(user) && orgId) {
-            stripeState = await fetchOrgStripeState(orgId);
+          const orgId = deriveOrgId(user) ?? prev.organizationId;
+          let orgState = {
+            id: null as string | null,
+            connected: false,
+            name: null as string | null,
+            approvalStatus: null as OrgApprovalStatus | null,
+          };
+          const resolvedRole = deriveRole(user) ?? prev.role;
+          if (user && orgId) {
+            if (
+              shouldLoadOrgStripe(user) ||
+              resolvedRole === 'org_admin'
+            ) {
+              orgState = await fetchOrgState(orgId);
+            }
           }
 
-          set(buildAuthPatch(user, session, stripeState));
+          set(
+            buildAuthPatch(user, session, orgState, {
+              role: prev.role,
+              organizationId: prev.organizationId,
+              organizationName: prev.organizationName,
+              orgApprovalStatus: prev.orgApprovalStatus,
+            }),
+          );
         })();
       });
     } catch {
@@ -195,6 +311,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   },
 
   login: async (email: string, password: string) => {
+    authFlowInProgress = true;
+    useRaffleStore.getState().reset();
     set({ isLoading: true, error: null });
     try {
       const normalizedEmail = email.trim().toLowerCase();
@@ -208,7 +326,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         return;
       }
 
-      const user = data.user;
+      let user = data.user;
 
       if (deriveRole(user) === 'worker' && isWorkerExpired(user)) {
         await supabase.auth.signOut();
@@ -217,14 +335,19 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       }
 
       if (
-        user.user_metadata?.role === 'org_admin' &&
-        !user.user_metadata?.organization_id &&
+        readMetadataRole(user) === 'org_admin' &&
+        !deriveOrgId(user) &&
         user.user_metadata?.organization_name
       ) {
         const orgName = user.user_metadata.organization_name;
         const { data: orgData } = await supabase
           .from('organization')
-          .insert({ name: orgName, owner_id: user.id })
+          .insert({
+            name: orgName,
+            owner_id: user.id,
+            contact_email: normalizedEmail,
+            approval_status: 'pending',
+          })
           .select()
           .single();
 
@@ -235,26 +358,40 @@ export const useAuthStore = create<AuthState>((set, get) => ({
               organization_name: orgName,
             },
           });
-          user.user_metadata.organization_id = orgData.id;
         }
       }
 
+      const refreshed = await refreshAuthUser(user, data.session);
+      user = refreshed.user;
+
+      const synced = await ensureSuperAdminJwtMetadata(user, refreshed.session);
+      user = synced.user;
+
       const loginOrgId = deriveOrgId(user);
-      let loginStripe = { id: null as string | null, connected: false, name: null as string | null };
-      if (shouldLoadOrgStripe(user) && loginOrgId) {
-        loginStripe = await fetchOrgStripeState(loginOrgId);
+      let loginOrgState = {
+        id: null as string | null,
+        connected: false,
+        name: null as string | null,
+        approvalStatus: null as OrgApprovalStatus | null,
+      };
+      if (loginOrgId && (shouldLoadOrgStripe(user) || deriveRole(user) === 'org_admin')) {
+        loginOrgState = await fetchOrgState(loginOrgId);
       }
 
       set({
-        ...buildAuthPatch(user, data.session, loginStripe),
+        ...buildAuthPatch(user, synced.session ?? refreshed.session, loginOrgState),
         isLoading: false,
       });
     } catch (err: any) {
       set({ error: err.message || 'Login failed', isLoading: false });
+    } finally {
+      authFlowInProgress = false;
     }
   },
 
   signup: async (email: string, password: string, organizationName: string) => {
+    authFlowInProgress = true;
+    useRaffleStore.getState().reset();
     set({ isLoading: true, error: null });
     try {
       const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
@@ -278,9 +415,15 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         return;
       }
 
+      const normalizedSignupEmail = email.trim().toLowerCase();
       const { data: orgData, error: orgError } = await supabase
         .from('organization')
-        .insert({ name: organizationName, owner_id: signUpData.user.id })
+        .insert({
+          name: organizationName,
+          owner_id: signUpData.user.id,
+          contact_email: normalizedSignupEmail,
+          approval_status: 'pending',
+        })
         .select()
         .single();
 
@@ -302,29 +445,26 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         return;
       }
 
-      const user = signUpData.user;
-      user.user_metadata = {
-        ...user.user_metadata,
-        role: 'org_admin',
-        organization_id: orgData.id,
-        organization_name: organizationName,
-      };
+      const refreshed = await refreshAuthUser(
+        signUpData.user,
+        signUpData.session,
+      );
+
+      const signupOrgState = await fetchOrgState(orgData.id);
 
       set({
-        user,
-        session: signUpData.session,
-        isAdmin: true,
-        canManageTapToPay: true,
-        role: 'org_admin',
-        organizationId: orgData.id,
-        organizationName,
-        raffleId: null,
-        orgStripeAccountId: null,
-        orgStripeConnected: false,
+        ...buildAuthPatch(refreshed.user, refreshed.session, signupOrgState, {
+          role: 'org_admin',
+          organizationId: orgData.id,
+          organizationName,
+          orgApprovalStatus: 'pending',
+        }),
         isLoading: false,
       });
     } catch (err: any) {
       set({ error: err.message || 'Signup failed', isLoading: false });
+    } finally {
+      authFlowInProgress = false;
     }
   },
 
@@ -332,22 +472,12 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     email: string,
     password: string,
     raffleId: string,
-    organizationId: string,
+    organizationId: string | null,
     durationHours: number,
   ) => {
     set({ isLoading: true, error: null });
     try {
       const normalizedEmail = email.trim().toLowerCase();
-
-      const existingWorker = await workerApi.findExistingWorkerByEmail(
-        organizationId,
-        normalizedEmail,
-      );
-      if (existingWorker) {
-        throw new Error(
-          workerDuplicateEmailMessage(existingWorker.raffle_id, raffleId),
-        );
-      }
 
       const { data, error } = await supabase.functions.invoke('create-worker', {
         body: {
@@ -359,9 +489,13 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         },
       });
 
+      if (data?.error) {
+        throw new Error(String(data.error));
+      }
+
       if (error) {
         let detailedMessage = error.message || 'Failed to create worker';
-        const context = (error as any)?.context;
+        const context = (error as { context?: Response }).context;
         if (context) {
           try {
             const body = await context.json();
@@ -377,7 +511,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         }
         throw new Error(detailedMessage);
       }
-      if (data?.error) throw new Error(data.error);
 
       set({ isLoading: false, error: null });
     } catch (err: any) {
@@ -420,11 +553,24 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     return { charges_enabled: !!data.charges_enabled };
   },
 
+  refreshOrgState: async () => {
+    const { organizationId, session } = get();
+    const { data } = await supabase.auth.getUser();
+    const user = data.user ?? get().user;
+    if (!organizationId || !user) return;
+
+    const orgState = await fetchOrgState(organizationId);
+    set({
+      ...buildAuthPatch(user, session, orgState),
+    });
+  },
+
   logout: async () => {
     set({ isLoading: true });
     try {
       await supabase.auth.signOut();
       clearTapToPayTermsSession();
+      useRaffleStore.getState().reset();
       set({
         user: null,
         session: null,
@@ -436,6 +582,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         raffleId: null,
         orgStripeAccountId: null,
         orgStripeConnected: false,
+        orgApprovalStatus: null,
         isLoading: false,
       });
     } catch {

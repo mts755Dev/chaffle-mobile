@@ -22,13 +22,22 @@ async function parseFunctionError(error: any, fallback: string): Promise<string>
 
 export const workerApi = {
   getWorkersByRaffle: async (raffleId: string): Promise<Worker[]> => {
-    const { data, error } = await supabase
-      .from('worker')
-      .select('*')
-      .eq('raffle_id', raffleId)
-      .order('created_at', { ascending: false });
-    if (error) throw error;
-    return data || [];
+    const { data, error } = await supabase.functions.invoke('manage-workers', {
+      body: {
+        action: 'list-by-raffle',
+        raffleId,
+      },
+    });
+
+    if (data?.error) {
+      throw new Error(String(data.error));
+    }
+
+    if (error) {
+      throw new Error(await parseFunctionError(error, 'Failed to load workers'));
+    }
+
+    return (data?.workers as Worker[]) ?? [];
   },
 
   getWorkerByUserId: async (userId: string): Promise<Worker | null> => {
@@ -70,6 +79,21 @@ export const workerApi = {
     if (data?.error) {
       throw new Error(String(data.error));
     }
+  },
+
+  /** Returns an existing worker row with the same email, if any. */
+  findExistingWorkerByEmailGlobal: async (
+    email: string,
+  ): Promise<Pick<Worker, 'id' | 'raffle_id' | 'email'> | null> => {
+    const normalizedEmail = email.trim().toLowerCase();
+    const { data, error } = await supabase
+      .from('worker')
+      .select('id, raffle_id, email')
+      .ilike('email', normalizedEmail)
+      .limit(1);
+
+    if (error) throw error;
+    return data?.[0] ?? null;
   },
 
   /** Returns an existing worker row in this org with the same email, if any. */

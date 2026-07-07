@@ -2,3 +2,4 @@ export { default as apiClient } from './client';
 export { raffleApi, ticketApi, secureLinkApi, contactApi } from './raffleApi';
 export { stripeApi } from './stripeApi';
 export { drawApi } from './drawApi';
+export { organizationApi } from './organizationApi';

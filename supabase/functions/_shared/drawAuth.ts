@@ -2,11 +2,17 @@ import type { User } from "https://esm.sh/@supabase/supabase-js@2";
 
 /** Matches chaffle/lib/authRoles.ts isWebSuperAdmin */
 export function isSuperAdmin(user: User): boolean {
-  const role = user.user_metadata?.role as string | undefined;
-  if (role === "admin") return true;
+  const role =
+    (user.user_metadata?.role as string | undefined) ??
+    (user.app_metadata?.role as string | undefined);
+  if (role === "admin" || role === "super_admin") return true;
   if (role === "org_admin" || role === "worker") return false;
 
-  if (user.user_metadata?.firstName && !user.user_metadata?.organization_id) {
+  const organizationId =
+    (user.user_metadata?.organization_id as string | undefined) ??
+    (user.app_metadata?.organization_id as string | undefined);
+
+  if (user.user_metadata?.firstName && !organizationId) {
     return true;
   }
 

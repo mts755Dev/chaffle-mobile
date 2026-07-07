@@ -1,5 +1,7 @@
 // @ts-nocheck — Runs in Supabase's Deno runtime, not in the React Native bundle.
 
+import { computeChargeBreakdown } from "../_shared/paymentFees.ts";
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers":
@@ -55,34 +57,28 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    // amount = total price for the tier (e.g. $5 for 1 ticket, $10 for 3 tickets)
     const baseAmountCents = Math.round(amount * 100);
-    let totalCents = baseAmountCents;
-    let feeCents = 0;
-
-    // Match the website: when fee is opted-in, charge the CUSTOMER an extra 10%
-    // on top of the base price. The 10% goes to Chaffle as application_fee.
-    // The organizer receives the full base price (minus Stripe processing fees).
-    if (isApplicationAmount) {
-      feeCents = Math.round(baseAmountCents * 0.1);
-      totalCents = baseAmountCents + feeCents;
-    }
+    const breakdown = computeChargeBreakdown(baseAmountCents, {
+      includePlatformFee: !!isApplicationAmount,
+      channel: "online",
+    });
 
     const params: Record<string, string> = {
-      amount: String(totalCents),
+      amount: String(breakdown.totalCents),
       currency: "usd",
       "payment_method_types[]": "card",
       "metadata[ticketId]": ticketId,
       "metadata[quantity]": String(quantity ?? 1),
       "metadata[email]": email ?? "",
+      "metadata[baseAmountCents]": String(breakdown.baseAmountCents),
+      "metadata[processingFeeCents]": String(breakdown.processingFeeCents),
+      "metadata[platformFeeCents]": String(breakdown.platformFeeCents),
     };
 
-    if (feeCents > 0) {
-      params.application_fee_amount = String(feeCents);
+    if (breakdown.platformFeeCents > 0) {
+      params.application_fee_amount = String(breakdown.platformFeeCents);
     }
 
-    // Direct charge: PaymentIntent is created ON the connected account.
-    // Money goes directly to the raffle organizer's Stripe account.
     const paymentIntent = await stripePost(
       "/payment_intents",
       params,
@@ -92,6 +88,7 @@ Deno.serve(async (req: Request) => {
     return jsonResponse({
       clientSecret: paymentIntent.client_secret,
       id: paymentIntent.id,
+      chargeBreakdown: breakdown,
     });
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : "Internal server error";

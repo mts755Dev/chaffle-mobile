@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import { DonationForm, TicketTotalByRaffle } from '../types';
+import { DonationForm, TicketTotalByRaffle, UpdateFormPayload } from '../types';
 import { raffleApi } from '../services/api/raffleApi';
 
 interface RaffleState {
@@ -14,11 +14,15 @@ interface RaffleState {
   fetchFormById: (id: string) => Promise<DonationForm | null>;
   fetchTicketTotals: (raffleId?: string, raffleIds?: string[]) => Promise<TicketTotalByRaffle[]>;
   fetchCompletedRaffleIds: (raffleIds?: string[]) => Promise<void>;
-  createForm: (organizationId?: string | null) => Promise<DonationForm>;
+  createForm: (
+    organizationId?: string | null,
+    data?: Omit<UpdateFormPayload, 'id'>,
+  ) => Promise<DonationForm>;
   updateForm: (payload: Partial<DonationForm> & { id: string }) => Promise<void>;
   deleteForm: (id: string) => Promise<void>;
   setCurrentForm: (form: DonationForm | null) => void;
   clearError: () => void;
+  reset: () => void;
 }
 
 export const useRaffleStore = create<RaffleState>((set, get) => ({
@@ -70,12 +74,16 @@ export const useRaffleStore = create<RaffleState>((set, get) => ({
     }
   },
 
-  createForm: async (organizationId?: string | null) => {
+  createForm: async (
+    organizationId?: string | null,
+    data?: Omit<UpdateFormPayload, 'id'>,
+  ) => {
     set({ isLoading: true, error: null });
     try {
-      const form = await raffleApi.createDonationForm(organizationId);
+      const form = await raffleApi.createDonationForm(organizationId, data);
       set((state) => ({
         forms: [...state.forms, form],
+        currentForm: form,
         isLoading: false,
       }));
       return form;
@@ -116,4 +124,13 @@ export const useRaffleStore = create<RaffleState>((set, get) => ({
 
   setCurrentForm: (form) => set({ currentForm: form }),
   clearError: () => set({ error: null }),
+  reset: () =>
+    set({
+      forms: [],
+      currentForm: null,
+      ticketTotals: [],
+      completedRaffleIds: [],
+      isLoading: false,
+      error: null,
+    }),
 }));

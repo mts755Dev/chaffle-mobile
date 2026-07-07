@@ -3,6 +3,7 @@
 // Deletes a worker profile and its auth user so the email can be reused.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { isSuperAdmin } from "../_shared/drawAuth.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -21,6 +22,12 @@ function getAdminClient() {
   return createClient(
     Deno.env.get("SUPABASE_URL")!,
     Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    {
+      auth: {
+        autoRefreshToken: false,
+        persistSession: false,
+      },
+    },
   );
 }
 
@@ -70,18 +77,29 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ error: "Worker not found" }, 404);
     }
 
-    const { data: organization, error: orgError } = await adminClient
-      .from("organization")
-      .select("id")
-      .eq("id", worker.organization_id)
-      .eq("owner_id", user.id)
-      .single();
+    const callerIsSuperAdmin = isSuperAdmin(user);
 
-    if (orgError || !organization) {
-      return jsonResponse(
-        { error: "You can only delete workers for your organization" },
-        403,
-      );
+    if (!callerIsSuperAdmin) {
+      if (!worker.organization_id) {
+        return jsonResponse(
+          { error: "You can only delete workers for your organization" },
+          403,
+        );
+      }
+
+      const { data: organization, error: orgError } = await adminClient
+        .from("organization")
+        .select("id")
+        .eq("id", worker.organization_id)
+        .eq("owner_id", user.id)
+        .single();
+
+      if (orgError || !organization) {
+        return jsonResponse(
+          { error: "You can only delete workers for your organization" },
+          403,
+        );
+      }
     }
 
     if (worker.user_id) {

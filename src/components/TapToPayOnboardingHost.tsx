@@ -1,6 +1,6 @@
 /**
  * App-wide Tap to Pay first-run onboarding (Apple announcement / enable prompt).
- * Intro stays visible until Tap to Pay setup is fully complete on this device.
+ * Intro and enable prompt each show at most once until setup is complete (persisted).
  */
 
 import React, { useCallback, useEffect, useState } from 'react';
@@ -13,7 +13,10 @@ import { useAuthStore } from '../store/authStore';
 import { RootStackParamList } from '../types';
 import {
   hasCompletedTapToPaySetup,
+  hasSeenTapToPayEnablePrompt,
+  hasSeenTapToPayIntro,
   markTapToPayEnablePromptSeen,
+  markTapToPayIntroSeen,
   subscribeTapToPayOnboardingReset,
   subscribeTapToPaySetupComplete,
 } from '../services/tapToPayPrefs';
@@ -29,7 +32,6 @@ export default function TapToPayOnboardingHost() {
   const { isAdmin, role, orgStripeConnected, orgStripeAccountId } = useAuthStore();
   const [showIntro, setShowIntro] = useState(false);
   const [showEnable, setShowEnable] = useState(false);
-  const [skippedIntroThisSession, setSkippedIntroThisSession] = useState(false);
 
   const eligible =
     Platform.OS === 'ios'
@@ -54,20 +56,25 @@ export default function TapToPayOnboardingHost() {
       return;
     }
 
-    if (!skippedIntroThisSession) {
+    const introSeen = await hasSeenTapToPayIntro();
+    if (!introSeen) {
       setShowIntro(true);
       setShowEnable(false);
       return;
     }
 
+    const enableSeen = await hasSeenTapToPayEnablePrompt();
     setShowIntro(false);
-    setShowEnable(true);
-  }, [eligible, skippedIntroThisSession]);
+    setShowEnable(!enableSeen);
+  }, [eligible]);
 
   useEffect(() => {
-    if (!eligible) return;
+    if (!eligible) {
+      setShowIntro(false);
+      setShowEnable(false);
+      return;
+    }
 
-    setSkippedIntroThisSession(false);
     void refreshOnboardingState();
 
     const unsubscribeComplete = subscribeTapToPaySetupComplete(() => {
@@ -75,36 +82,28 @@ export default function TapToPayOnboardingHost() {
     });
 
     const unsubscribeReset = subscribeTapToPayOnboardingReset(() => {
-      setSkippedIntroThisSession(false);
-      void (async () => {
-        const setupComplete = await hasCompletedTapToPaySetup();
-        if (!setupComplete) {
-          setShowIntro(true);
-          setShowEnable(false);
-        }
-      })();
+      void refreshOnboardingState();
     });
 
     return () => {
       unsubscribeComplete();
       unsubscribeReset();
     };
-  }, [eligible, isAdmin, role, orgStripeConnected, orgStripeAccountId, refreshOnboardingState]);
-
-  useEffect(() => {
-    if (!eligible) return;
-    void refreshOnboardingState();
-  }, [eligible, skippedIntroThisSession, refreshOnboardingState]);
+  }, [eligible, refreshOnboardingState]);
 
   const handleIntroGetStarted = () => {
     setShowIntro(false);
+    void markTapToPayIntroSeen();
     openTapToPaySettings();
   };
 
   const handleIntroDismiss = () => {
     setShowIntro(false);
-    setSkippedIntroThisSession(true);
-    setShowEnable(true);
+    void (async () => {
+      await markTapToPayIntroSeen();
+      const enableSeen = await hasSeenTapToPayEnablePrompt();
+      setShowEnable(!enableSeen);
+    })();
   };
 
   const handleEnableSetUp = () => {

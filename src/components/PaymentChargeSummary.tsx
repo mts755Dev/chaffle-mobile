@@ -2,11 +2,20 @@ import React from 'react';
 import { View, StyleSheet } from 'react-native';
 import { Text } from 'react-native-paper';
 import { COLORS } from '../constants';
-import { formatCurrency } from '../utils';
 import {
   computeChargeBreakdown,
   type PaymentChannel,
 } from '../utils/paymentFees';
+
+/** Payment breakdowns must show exact cents (unlike whole-dollar ticket prices). */
+function formatCents(cents: number): string {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(cents / 100);
+}
 
 interface PaymentChargeSummaryProps {
   baseAmount: number;
@@ -32,29 +41,29 @@ export default function PaymentChargeSummary({
         <Text style={styles.title}>Payment summary</Text>
       ) : null}
       <View style={styles.row}>
-        <Text style={styles.label}>Ticket amount (to organization)</Text>
-        <Text style={styles.value}>
-          {formatCurrency(breakdown.baseAmountCents / 100)}
+        <Text style={styles.label}>Ticket amount</Text>
+        <Text style={styles.value} numberOfLines={1}>
+          {formatCents(breakdown.baseAmountCents)}
         </Text>
       </View>
       <View style={styles.row}>
         <Text style={styles.label}>Processing fee</Text>
-        <Text style={styles.value}>
-          {formatCurrency(breakdown.processingFeeCents / 100)}
+        <Text style={styles.value} numberOfLines={1}>
+          {formatCents(breakdown.processingFeeCents)}
         </Text>
       </View>
       {includePlatformFee ? (
         <View style={styles.row}>
-          <Text style={styles.label}>Platform support (10%)</Text>
-          <Text style={styles.value}>
-            {formatCurrency(breakdown.platformFeeCents / 100)}
+          <Text style={styles.label}>Platform support</Text>
+          <Text style={styles.value} numberOfLines={1}>
+            {formatCents(breakdown.platformFeeCents)}
           </Text>
         </View>
       ) : null}
       <View style={[styles.row, styles.totalRow]}>
         <Text style={styles.totalLabel}>Customer pays</Text>
-        <Text style={styles.totalValue}>
-          {formatCurrency(breakdown.totalCents / 100)}
+        <Text style={styles.totalValue} numberOfLines={1}>
+          {formatCents(breakdown.totalCents)}
         </Text>
       </View>
     </View>
@@ -81,11 +90,14 @@ const styles = StyleSheet.create({
     flex: 1,
     fontSize: 13,
     color: COLORS.textSecondary,
+    flexShrink: 1,
+    flexWrap: 'wrap',
   },
   value: {
     fontSize: 13,
     fontWeight: '600',
     color: COLORS.foreground,
+    flexShrink: 0,
   },
   totalRow: {
     marginTop: 4,
@@ -102,5 +114,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '700',
     color: COLORS.primary,
+    flexShrink: 0,
   },
 });

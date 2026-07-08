@@ -4,6 +4,8 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { isSuperAdmin } from "../_shared/drawAuth.ts";
+import { callerCanDeleteWorker } from "../_shared/workerAccess.ts";
+import { deleteWorkerRecord } from "../_shared/workerLifecycle.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -69,7 +71,7 @@ Deno.serve(async (req: Request) => {
 
     const { data: worker, error: workerError } = await adminClient
       .from("worker")
-      .select("id, user_id, organization_id, email")
+      .select("id, user_id, organization_id, email, raffle_id, expires_at")
       .eq("id", workerId)
       .single();
 
@@ -78,53 +80,21 @@ Deno.serve(async (req: Request) => {
     }
 
     const callerIsSuperAdmin = isSuperAdmin(user);
+    const canDelete = await callerCanDeleteWorker(
+      adminClient,
+      worker,
+      user,
+      callerIsSuperAdmin,
+    );
 
-    if (!callerIsSuperAdmin) {
-      if (!worker.organization_id) {
-        return jsonResponse(
-          { error: "You can only delete workers for your organization" },
-          403,
-        );
-      }
-
-      const { data: organization, error: orgError } = await adminClient
-        .from("organization")
-        .select("id")
-        .eq("id", worker.organization_id)
-        .eq("owner_id", user.id)
-        .single();
-
-      if (orgError || !organization) {
-        return jsonResponse(
-          { error: "You can only delete workers for your organization" },
-          403,
-        );
-      }
-    }
-
-    if (worker.user_id) {
-      const { error: deleteAuthError } = await adminClient.auth.admin.deleteUser(
-        worker.user_id,
-      );
-      if (deleteAuthError) {
-        return jsonResponse(
-          { error: deleteAuthError.message || "Failed to delete worker login" },
-          400,
-        );
-      }
-    }
-
-    const { error: deleteWorkerError } = await adminClient
-      .from("worker")
-      .delete()
-      .eq("id", workerId);
-
-    if (deleteWorkerError) {
+    if (!canDelete) {
       return jsonResponse(
-        { error: deleteWorkerError.message || "Failed to delete worker profile" },
-        400,
+        { error: "You can only terminate workers for your organization" },
+        403,
       );
     }
+
+    await deleteWorkerRecord(adminClient, worker, supabaseUrl, serviceRole);
 
     return jsonResponse({ success: true, email: worker.email });
   } catch (err: unknown) {

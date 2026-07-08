@@ -24,6 +24,8 @@
       "infoPlist": {
         "NSLocationWhenInUseUsageDescription": "Chaffle needs your location to verify raffle eligibility in your state.",
         "NSCameraUsageDescription": "Chaffle needs camera access to scan QR codes.",
+        "NSPhotoLibraryUsageDescription": "Chaffle needs photo library access to upload raffle background images.",
+        "NSPhotoLibraryAddUsageDescription": "Chaffle needs permission to save images to your photo library.",
         "ITSAppUsesNonExemptEncryption": false,
         "CFBundleLocalizations": [
           "en",
@@ -67,6 +69,13 @@
       ]
     },
     "plugins": [
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Chaffle needs photo library access to upload raffle background images.",
+          "cameraPermission": "Chaffle needs camera access to scan QR codes and take raffle photos."
+        }
+      ],
       [
         "expo-splash-screen",
         {

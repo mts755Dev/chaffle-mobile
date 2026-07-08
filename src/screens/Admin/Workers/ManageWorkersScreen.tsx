@@ -159,7 +159,8 @@ export default function ManageWorkersScreen() {
     }
 
     const normalizedEmail = email.trim().toLowerCase();
-    const duplicateInList = findWorkerWithEmail(workers, normalizedEmail);
+    const activeWorkers = workers.filter((worker) => !isExpired(worker.expires_at));
+    const duplicateInList = findWorkerWithEmail(activeWorkers, normalizedEmail);
     if (duplicateInList) {
       setFormError(workerDuplicateEmailMessage(duplicateInList.raffle_id, raffleId));
       return;
@@ -187,13 +188,16 @@ export default function ManageWorkersScreen() {
   };
 
   const handleDelete = (worker: Worker) => {
+    const expired = isExpired(worker.expires_at);
     Alert.alert(
-      'Terminate Worker',
-      `Remove ${worker.email}? They will no longer be able to access the app.`,
+      expired ? 'Remove Expired Worker' : 'Terminate Worker',
+      expired
+        ? `Remove expired worker ${worker.email}? This will free the email for reuse.`
+        : `Terminate ${worker.email}? They will immediately lose access to the app.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
-          text: 'Terminate',
+          text: expired ? 'Remove' : 'Terminate',
           style: 'destructive',
           onPress: async () => {
             try {

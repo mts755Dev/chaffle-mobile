@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import dayjs from 'dayjs';
+import { parseAppDate } from '../utils';
 
 interface CountdownState {
   days: number;
@@ -21,17 +22,23 @@ export function useCountdown(targetDate: string | null): CountdownState {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    if (!targetDate) {
-      setCountdown((prev) => ({ ...prev, isExpired: true }));
+    const target = parseAppDate(targetDate);
+    if (!target) {
+      setCountdown({
+        days: 0,
+        hours: 0,
+        minutes: 0,
+        seconds: 0,
+        isExpired: true,
+      });
       return;
     }
 
     const calculate = () => {
       const now = dayjs();
-      const target = dayjs(targetDate);
       const diff = target.diff(now, 'second');
 
-      if (diff <= 0) {
+      if (!Number.isFinite(diff) || diff <= 0) {
         setCountdown({
           days: 0,
           hours: 0,

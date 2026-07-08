@@ -1,4 +1,4 @@
-import React, { useState, useCallback, useLayoutEffect } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   StyleSheet,
@@ -65,6 +65,7 @@ export default function AdminDashboardScreen() {
     ticketTotals,
     completedRaffleIds,
     isLoading,
+    isRefreshing,
     error: storeError,
     fetchForms,
     fetchTicketTotals,
@@ -78,10 +79,6 @@ export default function AdminDashboardScreen() {
     ? getOrgApprovalBannerMessage(orgApprovalStatus)
     : null;
 
-  useLayoutEffect(() => {
-    navigation.setOptions({ headerRight: undefined });
-  }, [navigation]);
-
   const [refreshing, setRefreshing] = useState(false);
   const [filterText, setFilterText] = useState('');
   const [isConnectingStripe, setIsConnectingStripe] = useState(false);
@@ -90,9 +87,6 @@ export default function AdminDashboardScreen() {
 
   const showTapToPayFeatures =
     Platform.OS === 'ios' && canSetupTapToPayOnDevice(isAdmin, role);
-
-  const authReady = role !== null;
-  const orgContextReady = !isOrgAdmin || !!organizationId;
 
   // Filter forms by title
   const filteredForms = filterText.trim()
@@ -208,17 +202,12 @@ export default function AdminDashboardScreen() {
     return completedRaffleIds.includes(raffleId);
   };
 
-  if (!authReady || !orgContextReady) {
-    return <LoadingScreen message="Loading dashboard..." />;
-  }
-
-  if (isLoading && forms.length === 0) {
+  if (isLoading && !isRefreshing && forms.length === 0) {
     return <LoadingScreen message="Loading dashboard..." />;
   }
 
   return (
     <View style={styles.container}>
-      {/* Quick navigation */}
       <View style={styles.navTabs}>
         {isSuperAdmin ? (
           <TouchableOpacity
@@ -524,10 +513,11 @@ export default function AdminDashboardScreen() {
                                 role,
                                 orgStripeConnected,
                                 orgStripeAccountId,
+                                organizationId,
                               )
                             ) {
                               if (
-                                usesOrganizationStripe(role)
+                                usesOrganizationStripe(role, organizationId)
                                 && !orgStripeConnected
                               ) {
                                 showOrgStripeRequiredAlert(undefined, role);

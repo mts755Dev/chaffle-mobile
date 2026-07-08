@@ -4,6 +4,9 @@ export const API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || 'https://cha
 // Supabase
 export const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL || '';
 export const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || '';
+/** Same bucket the web app uses for raffle background / gallery images. */
+export const STORAGE_BUCKET =
+  process.env.EXPO_PUBLIC_STORAGE_BUCKET || 'chaffle-primary';
 
 // Stripe
 export const STRIPE_PUBLISHABLE_KEY = process.env.EXPO_PUBLIC_STRIPE_PUBLISHABLE_KEY || '';

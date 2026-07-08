@@ -194,7 +194,14 @@ export type RootStackParamList = {
   AdminTickets: undefined;
   AdminWinners: undefined;
   InPersonPayment: { id: string };
-  AdminTapToPay: { startSetup?: boolean };
+  AdminTapToPay: {
+    startSetup?: boolean;
+    /** Raffle Stripe account for workers assigned to a standalone (no-org) raffle. */
+    stripeAccountId?: string;
+    merchantDisplayName?: string;
+    /** Current raffle org link — overrides JWT when deciding org vs raffle Stripe. */
+    raffleOrganizationId?: string | null;
+  };
   TapToPayEducation: undefined;
   StripeConnectLink: { raffleId: string };
   ManageWorkers: {

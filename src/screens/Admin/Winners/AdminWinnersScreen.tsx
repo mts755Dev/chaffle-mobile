@@ -15,24 +15,44 @@ import { formatCurrency, shortId, formatDate } from '../../../utils';
 import LoadingScreen from '../../../components/LoadingScreen';
 
 export default function AdminWinnersScreen() {
-  const { winnerTickets, isLoading, fetchWinnerTickets } = useTicketStore();
+  const { winnerTickets, isLoading, isRefreshing, fetchWinnerTickets } = useTicketStore();
   const { role, organizationId } = useAuthStore();
-  const { forms } = useRaffleStore();
+  const { fetchForms } = useRaffleStore();
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
-  const isOrgAdmin = role === 'org_admin';
-  const orgRaffleIds = isOrgAdmin ? forms.map((f) => f.id) : undefined;
+  const loadWinners = useCallback(async () => {
+    // Any organization-scoped account (every org_admin / worker with an org)
+    // only sees winners from that organization's raffles — not platform-wide.
+    const isOrgScoped =
+      role === 'org_admin' ||
+      role === 'worker' ||
+      (!!organizationId && role !== 'super_admin');
+
+    if (isOrgScoped) {
+      if (!organizationId) {
+        await fetchWinnerTickets([]);
+        return;
+      }
+      await fetchForms(organizationId);
+      const raffleIds = useRaffleStore.getState().forms.map((f) => f.id);
+      await fetchWinnerTickets(raffleIds);
+      return;
+    }
+
+    // Super admin (no org scope): all winners
+    await fetchWinnerTickets(undefined);
+  }, [role, organizationId, fetchForms, fetchWinnerTickets]);
 
   useFocusEffect(
     useCallback(() => {
-      fetchWinnerTickets(orgRaffleIds);
-    }, [organizationId]),
+      void loadWinners();
+    }, [loadWinners]),
   );
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await fetchWinnerTickets(orgRaffleIds);
+    await loadWinners();
     setRefreshing(false);
   };
 
@@ -148,7 +168,7 @@ export default function AdminWinnersScreen() {
     );
   };
 
-  if (isLoading && winnerTickets.length === 0) {
+  if (isLoading && !isRefreshing && winnerTickets.length === 0) {
     return <LoadingScreen message="Loading winners..." />;
   }
 

@@ -21,14 +21,18 @@ import { COLORS } from '../../constants';
 import { RootStackParamList, DonationForm } from '../../types';
 import { useAuthStore } from '../../store/authStore';
 import { raffleApi } from '../../services/api/raffleApi';
-import { formatCurrency, formatDate, resolveImageUrl } from '../../utils';
+import { formatCurrency, formatDate, resolveImageUrl, parseAppDate } from '../../utils';
 import LoadingScreen from '../../components/LoadingScreen';
 import CountdownTimer from '../../components/CountdownTimer';
 import TapToPayIcon from '../../components/TapToPayIcon';
 import {
   canSetupTapToPayOnDevice,
-  isOrgTapToPayReady,
+  isRaffleStripeChargeable,
+  isTapToPayPaymentReady,
+  resolveTapToPayOrganizationId,
   showOrgStripeRequiredAlert,
+  showRaffleStripeRequiredAlert,
+  usesOrganizationStripe,
 } from '../../utils/tapToPayAccess';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -122,7 +126,7 @@ function WorkerProfileCard({
               <View style={styles.expiryInline}>
                 <Icon source="clock-outline" size={13} color={COLORS.warning} />
                 <Text style={styles.expiryInlineText}>
-                  Access expires {formatDate(expiresDate, 'MMM D, YYYY')}
+                  Access expires {formatDate(expiresDate, 'MMM D, YYYY h:mm A')}
                 </Text>
               </View>
             ) : null}
@@ -195,22 +199,32 @@ export default function WorkerDashboardScreen() {
     logout,
     isAdmin,
     role,
+    organizationId,
     organizationName,
     orgStripeConnected,
     orgStripeAccountId,
+    refreshOrgState,
   } = useAuthStore();
   const [raffle, setRaffle] = useState<DonationForm | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
   const showTapToPayFeatures =
     Platform.OS === 'ios' && canSetupTapToPayOnDevice(isAdmin, role);
-  const orgStripeReady = isOrgTapToPayReady(
+  const tapToPayOrgId = resolveTapToPayOrganizationId(
+    raffle?.organization_id,
+    organizationId,
+  );
+  const needsOrgStripe = usesOrganizationStripe(role, tapToPayOrgId);
+  const raffleStripeAccount = raffle?.stripeAccount ?? null;
+  const raffleHasStripe = isRaffleStripeChargeable(raffleStripeAccount);
+  const orgStripeReady = isTapToPayPaymentReady(
     role,
     orgStripeConnected,
     orgStripeAccountId,
+    tapToPayOrgId,
+    raffleStripeAccount,
   );
-  const canSellInPerson =
-    orgStripeReady && !!(raffle?.stripeAccount as any)?.id;
+  const canSellInPerson = orgStripeReady && raffleHasStripe;
 
   const displayName = getWorkerDisplayName(
     user?.email,
@@ -220,8 +234,8 @@ export default function WorkerDashboardScreen() {
   const expiresAt = user?.user_metadata?.expires_at as string | undefined;
   const expiresDate = expiresAt ? new Date(expiresAt) : null;
   const isExpired = expiresDate ? expiresDate < new Date() : false;
-  const isRaffleCompleted =
-    !!raffle?.draw_date && new Date(raffle.draw_date) < new Date();
+  const drawDate = parseAppDate(raffle?.draw_date);
+  const isRaffleCompleted = !!drawDate && drawDate.isBefore(new Date());
 
   const handleLogout = useCallback(() => {
     Alert.alert('Sign out', 'Are you sure you want to sign out?', [
@@ -250,25 +264,40 @@ export default function WorkerDashboardScreen() {
         return;
       }
       setRaffle(form);
+      if (form?.organization_id) {
+        await refreshOrgState();
+      }
     } catch {
       // Silently handle
     } finally {
       setIsLoading(false);
     }
-  }, [raffleId]);
+  }, [raffleId, refreshOrgState]);
 
   useEffect(() => {
     loadRaffle();
   }, [loadRaffle]);
 
   const openTapToPaySettings = () => {
-    navigation.navigate('AdminTapToPay', {});
+    navigation.navigate('AdminTapToPay', {
+      stripeAccountId: raffleStripeAccount?.id,
+      merchantDisplayName: raffle?.title?.trim() || undefined,
+      raffleOrganizationId: raffle?.organization_id ?? null,
+    });
   };
 
   const openInPersonPayment = () => {
     if (!raffle) return;
     if (!orgStripeReady) {
-      showOrgStripeRequiredAlert(undefined, role);
+      if (needsOrgStripe) {
+        showOrgStripeRequiredAlert(undefined, role);
+      } else {
+        showRaffleStripeRequiredAlert();
+      }
+      return;
+    }
+    if (!raffleHasStripe) {
+      showRaffleStripeRequiredAlert();
       return;
     }
     navigation.navigate('InPersonPayment', { id: raffle.id });
@@ -315,9 +344,11 @@ export default function WorkerDashboardScreen() {
               }
               title="Tap to Pay on iPhone"
               subtitle={
-                orgStripeReady
-                  ? 'Set up contactless payments on this device'
-                  : 'Waiting for organization Stripe'
+                needsOrgStripe && !orgStripeReady && !raffleHasStripe
+                  ? 'Waiting for organization Stripe'
+                  : raffleHasStripe
+                    ? 'Set up contactless payments on this device'
+                    : 'Waiting for raffle Stripe'
               }
               onPress={openTapToPaySettings}
               last={!canSellInPerson}
@@ -405,7 +436,7 @@ export default function WorkerDashboardScreen() {
               <View style={styles.metaItem}>
                 <Text style={styles.metaLabel}>Draw</Text>
                 <Text style={styles.metaValue} numberOfLines={1}>
-                  {raffle.draw_date
+                  {drawDate
                     ? formatDate(raffle.draw_date, 'MMM D, YYYY')
                     : '—'}
                 </Text>
@@ -418,9 +449,7 @@ export default function WorkerDashboardScreen() {
               </View>
             </View>
 
-            {!isRaffleCompleted &&
-            raffle.draw_date &&
-            new Date(raffle.draw_date) > new Date() ? (
+            {!isRaffleCompleted && drawDate ? (
               <View style={styles.countdownSection}>
                 <Text style={styles.countdownLabel}>Draw in</Text>
                 <CountdownTimer

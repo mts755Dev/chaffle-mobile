@@ -29,14 +29,15 @@ type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 export default function TapToPayOnboardingHost() {
   const navigation = useNavigation<NavigationProp>();
-  const { isAdmin, role, orgStripeConnected, orgStripeAccountId } = useAuthStore();
+  const { isAdmin, role, organizationId, orgStripeConnected, orgStripeAccountId } =
+    useAuthStore();
   const [showIntro, setShowIntro] = useState(false);
   const [showEnable, setShowEnable] = useState(false);
 
   const eligible =
     Platform.OS === 'ios'
     && canSetupTapToPayOnDevice(isAdmin, role)
-    && isOrgTapToPayReady(role, orgStripeConnected, orgStripeAccountId);
+    && isOrgTapToPayReady(role, orgStripeConnected, orgStripeAccountId, organizationId);
 
   const openTapToPaySettings = useCallback(() => {
     navigation.navigate('AdminTapToPay', { startSetup: true });

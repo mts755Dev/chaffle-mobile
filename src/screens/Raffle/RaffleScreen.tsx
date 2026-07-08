@@ -13,7 +13,7 @@ import { COLORS, API_BASE_URL } from '../../constants';
 import { RootStackParamList, DonationForm, TicketTotalByRaffle, Ticket } from '../../types';
 import { raffleApi, ticketApi } from '../../services/api/raffleApi';
 import { drawApi } from '../../services/api/drawApi';
-import { formatCurrency, calculatePot, formatDate, getTicketReferenceId } from '../../utils';
+import { formatCurrency, calculatePot, formatDate, getTicketReferenceId, parseAppDate } from '../../utils';
 import { useLocation } from '../../hooks/useLocation';
 import CountdownTimer from '../../components/CountdownTimer';
 import HtmlContent from '../../components/HtmlContent';
@@ -143,9 +143,8 @@ export default function RaffleScreen() {
 
   const totalAmount = ticketTotal?._sum.amount || 0;
   const potAmount = calculatePot(totalAmount);
-  const isExpired = donationForm.draw_date
-    ? new Date(donationForm.draw_date) < new Date()
-    : false;
+  const drawDate = parseAppDate(donationForm.draw_date);
+  const isExpired = drawDate ? drawDate.isBefore(new Date()) : false;
 
 
   return (
@@ -170,7 +169,7 @@ export default function RaffleScreen() {
           <Text style={styles.ticketInfoValue}>{donationForm.raffleLocation || '—'}</Text>
           <Text style={styles.ticketInfoSmall}>Draw Date</Text>
           <Text style={styles.ticketInfoValue}>
-            {donationForm.draw_date ? formatDate(donationForm.draw_date, 'M/D/YYYY') : '—'}
+            {drawDate ? formatDate(donationForm.draw_date, 'M/D/YYYY') : '—'}
           </Text>
         </View>
 
@@ -195,7 +194,7 @@ export default function RaffleScreen() {
               </Text>
               <Text style={styles.ticketInfoSmall}>Winner Ticket</Text>
             </>
-          ) : !isExpired ? (
+          ) : !isExpired && drawDate ? (
             <>
               <Text style={styles.ticketInfoSmall}>Hurry there's still time</Text>
               <CountdownTimer

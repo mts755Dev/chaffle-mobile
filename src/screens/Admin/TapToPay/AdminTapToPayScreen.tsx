@@ -18,8 +18,10 @@ import TapToPayMerchantEducationCard from '../../../components/TapToPayMerchantE
 import { presentAppleTapToPayEducation } from '../../../services/tapToPayEducation';
 import {
   canSetupTapToPayOnDevice,
-  isOrgTapToPayReady,
+  isTapToPayPaymentReady,
+  resolveTapToPayOrganizationId,
   showOrgStripeRequiredAlert,
+  showRaffleStripeRequiredAlert,
   usesOrganizationStripe,
 } from '../../../utils/tapToPayAccess';
 import { getTapToPayTermsAcceptedFromApple } from '../../../services/tapToPayTermsState';
@@ -33,17 +35,38 @@ export default function AdminTapToPayScreen() {
   const {
     isAdmin,
     role,
+    organizationId,
     organizationName,
     orgStripeAccountId,
     orgStripeConnected,
   } = useAuthStore();
 
   const allowed = canSetupTapToPayOnDevice(isAdmin, role);
-  const isOrgScoped = usesOrganizationStripe(role);
+  const routeStripeAccountId = route.params?.stripeAccountId;
+  const routeMerchantName = route.params?.merchantDisplayName;
+  const tapToPayOrgId = resolveTapToPayOrganizationId(
+    route.params?.raffleOrganizationId,
+    organizationId,
+  );
+  const isOrgScoped = usesOrganizationStripe(role, tapToPayOrgId);
+  const raffleStripeFromRoute = routeStripeAccountId
+    ? { id: routeStripeAccountId }
+    : null;
+  const paymentReady = isTapToPayPaymentReady(
+    role,
+    orgStripeConnected,
+    orgStripeAccountId,
+    tapToPayOrgId,
+    raffleStripeFromRoute,
+  );
+
+  // Prefer explicit raffle Stripe (workers / assigned standalone raffles), else org account.
   const terminalStripeAccount =
-    isOrgScoped ? orgStripeAccountId ?? undefined : undefined;
-  const merchantDisplayName =
-    isOrgScoped ? (organizationName?.trim() || 'Organization') : undefined;
+    routeStripeAccountId ??
+    (isOrgScoped ? orgStripeAccountId ?? undefined : undefined);
+  const merchantDisplayName = routeMerchantName?.trim()
+    || (isOrgScoped ? organizationName?.trim() : undefined)
+    || 'Organization';
 
   useEffect(() => {
     if (!allowed) {
@@ -52,11 +75,21 @@ export default function AdminTapToPayScreen() {
   }, [allowed, navigation]);
 
   useEffect(() => {
-    if (!allowed || !isOrgScoped) return;
-    if (!isOrgTapToPayReady(role, orgStripeConnected, orgStripeAccountId)) {
-      showOrgStripeRequiredAlert(() => navigation.goBack(), role);
+    if (!allowed) return;
+    if (!paymentReady) {
+      if (isOrgScoped) {
+        showOrgStripeRequiredAlert(() => navigation.goBack(), role);
+      } else {
+        showRaffleStripeRequiredAlert(() => navigation.goBack());
+      }
     }
-  }, [allowed, isOrgScoped, role, orgStripeConnected, orgStripeAccountId, navigation]);
+  }, [
+    allowed,
+    paymentReady,
+    isOrgScoped,
+    role,
+    navigation,
+  ]);
 
   if (!allowed) {
     return null;
@@ -72,7 +105,7 @@ export default function AdminTapToPayScreen() {
     );
   }
 
-  if (isOrgScoped && !isOrgTapToPayReady(role, orgStripeConnected, orgStripeAccountId)) {
+  if (!paymentReady || !terminalStripeAccount) {
     return null;
   }
 

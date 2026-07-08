@@ -1,79 +1,197 @@
 import { useState } from 'react';
+import { Alert, Platform } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
+import * as FileSystem from 'expo-file-system/legacy';
 import { supabase } from '../services/supabase/client';
+import { invokeEdgeFunction } from '../services/supabase/invokeFunction';
+import { STORAGE_BUCKET } from '../constants';
+
+const MAX_BYTES = 2 * 1024 * 1024; // 2 MB — matches web
+
+const BASE64_CHARS =
+  'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/';
+
+function base64ToUint8Array(base64: string): Uint8Array {
+  const cleaned = base64.replace(/[^A-Za-z0-9+/=]/g, '');
+  const padding = cleaned.endsWith('==') ? 2 : cleaned.endsWith('=') ? 1 : 0;
+  const outputLength = (cleaned.length * 3) / 4 - padding;
+  const bytes = new Uint8Array(outputLength);
+
+  let byteIndex = 0;
+  for (let i = 0; i < cleaned.length; i += 4) {
+    const enc1 = BASE64_CHARS.indexOf(cleaned[i]);
+    const enc2 = BASE64_CHARS.indexOf(cleaned[i + 1]);
+    const enc3 = BASE64_CHARS.indexOf(cleaned[i + 2]);
+    const enc4 = BASE64_CHARS.indexOf(cleaned[i + 3]);
+
+    const bitmap =
+      (enc1 << 18) | (enc2 << 12) | ((enc3 & 63) << 6) | (enc4 & 63);
+
+    if (byteIndex < outputLength) bytes[byteIndex++] = (bitmap >> 16) & 255;
+    if (byteIndex < outputLength) bytes[byteIndex++] = (bitmap >> 8) & 255;
+    if (byteIndex < outputLength) bytes[byteIndex++] = bitmap & 255;
+  }
+
+  return bytes;
+}
+
+function guessContentType(uri: string, mimeType?: string | null): string {
+  if (mimeType && mimeType.startsWith('image/')) return mimeType;
+  const ext = uri.split('?')[0].split('.').pop()?.toLowerCase();
+  if (ext === 'png') return 'image/png';
+  if (ext === 'jpg' || ext === 'jpeg') return 'image/jpeg';
+  if (ext === 'webp') return 'image/webp';
+  if (ext === 'gif') return 'image/gif';
+  if (ext === 'svg') return 'image/svg+xml';
+  return 'image/jpeg';
+}
+
+function extensionFromContentType(contentType: string, uri: string): string {
+  if (contentType.includes('png')) return 'png';
+  if (contentType.includes('webp')) return 'webp';
+  if (contentType.includes('gif')) return 'gif';
+  if (contentType.includes('svg')) return 'svg';
+  const fromUri = uri.split('?')[0].split('.').pop()?.toLowerCase();
+  if (fromUri && /^[a-z0-9]+$/.test(fromUri) && fromUri.length <= 5) {
+    return fromUri === 'jpeg' ? 'jpg' : fromUri;
+  }
+  return 'jpg';
+}
 
 export function useImageUpload() {
   const [isUploading, setIsUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const pickImage = async (): Promise<string | null> => {
+  const pickImage = async (): Promise<{
+    uri: string;
+    mimeType?: string | null;
+  } | null> => {
     try {
+      const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permission.granted) {
+        const message =
+          Platform.OS === 'ios'
+            ? 'Photo library access is required to upload a background image. Enable it in Settings.'
+            : 'Photo library access is required to upload a background image.';
+        setError(message);
+        Alert.alert('Permission needed', message);
+        return null;
+      }
+
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ['images'],
         allowsEditing: true,
         quality: 0.8,
       });
 
-      if (result.canceled) return null;
+      if (result.canceled || !result.assets?.[0]?.uri) return null;
 
-      return result.assets[0].uri;
+      const asset = result.assets[0];
+      return { uri: asset.uri, mimeType: asset.mimeType };
     } catch (err: any) {
-      setError(err.message);
+      const message = err?.message || 'Failed to open photo library';
+      setError(message);
+      Alert.alert('Image picker error', message);
       return null;
     }
   };
 
-  const uploadImage = async (uri: string, bucket: string = 'images'): Promise<string | null> => {
+  /**
+   * Uploads to the same storage layout as web:
+   *   /public/<raffleId>/background/<filename>
+   * Prefers the upload-raffle-image edge function; falls back to direct storage.
+   */
+  const uploadImage = async (
+    uri: string,
+    options: {
+      raffleId: string;
+      isBackground?: boolean;
+      mimeType?: string | null;
+    },
+  ): Promise<string | null> => {
     setIsUploading(true);
     setError(null);
 
     try {
-      const fileExt = uri.split('.').pop() || 'jpg';
-      const fileName = `${Date.now()}.${fileExt}`;
-      const filePath = `uploads/${fileName}`;
+      const { raffleId, isBackground = true, mimeType } = options;
+      if (!raffleId) {
+        throw new Error('Save the raffle first, then upload a background image.');
+      }
 
-      const response = await fetch(uri);
-      if (!response.ok) {
+      const contentType = guessContentType(uri, mimeType);
+      const fileExt = extensionFromContentType(contentType, uri);
+      const fileName = `${Date.now()}.${fileExt}`;
+      const filePath = `public/${raffleId}/${
+        isBackground ? 'background' : 'images'
+      }/${fileName}`;
+
+      const base64 = await FileSystem.readAsStringAsync(uri, {
+        encoding: FileSystem.EncodingType.Base64,
+      });
+      const bytes = base64ToUint8Array(base64);
+
+      if (bytes.byteLength > MAX_BYTES) {
+        throw new Error('Image must be under 2 MB');
+      }
+      if (bytes.byteLength === 0) {
         throw new Error('Failed to read image file');
       }
-      const bytes = new Uint8Array(await response.arrayBuffer());
 
-      const { data, error: uploadError } = await supabase.storage
-        .from(bucket)
+      // Prefer service-role edge function (matches web; bypasses storage RLS).
+      let edgePath: string | null = null;
+      try {
+        const data = await invokeEdgeFunction<{ path?: string }>(
+          'upload-raffle-image',
+          {
+            raffleId,
+            isBackground,
+            fileName,
+            contentType,
+            base64,
+          },
+          'Upload failed',
+        );
+        if (data?.path) {
+          edgePath = data.path;
+        }
+      } catch (invokeErr: any) {
+        // Fall through to direct storage upload below.
+        if (!invokeErr?.message?.toLowerCase().includes('not signed in')) {
+          console.warn('upload-raffle-image:', invokeErr?.message);
+        }
+      }
+
+      if (edgePath) {
+        setIsUploading(false);
+        return edgePath;
+      }
+
+      // Fallback: direct client upload (works if bucket policies allow authenticated writes).
+      const { error: uploadError } = await supabase.storage
+        .from(STORAGE_BUCKET)
         .upload(filePath, bytes, {
-          contentType: `image/${fileExt}`,
+          contentType,
+          upsert: true,
         });
 
-      if (uploadError) throw uploadError;
-
-      const { data: { publicUrl } } = supabase.storage.from(bucket).getPublicUrl(filePath);
+      if (uploadError) {
+        throw new Error(uploadError.message || 'Upload failed');
+      }
 
       setIsUploading(false);
-      return publicUrl;
+      return `/${filePath}`;
     } catch (err: any) {
-      setError(err.message || 'Upload failed');
+      const message = err?.message || 'Upload failed';
+      setError(message);
       setIsUploading(false);
+      Alert.alert('Upload failed', message);
       return null;
-    }
-  };
-
-  const deleteImage = async (url: string, bucket: string = 'images'): Promise<boolean> => {
-    try {
-      const path = url.split(`${bucket}/`)[1];
-      if (!path) return false;
-
-      const { error: deleteError } = await supabase.storage.from(bucket).remove([path]);
-      if (deleteError) throw deleteError;
-      return true;
-    } catch {
-      return false;
     }
   };
 
   return {
     pickImage,
     uploadImage,
-    deleteImage,
     isUploading,
     error,
   };

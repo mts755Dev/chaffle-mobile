@@ -2,12 +2,18 @@ import { create } from 'zustand';
 import { DonationForm, TicketTotalByRaffle, UpdateFormPayload } from '../types';
 import { raffleApi } from '../services/api/raffleApi';
 
+function buildFormsScopeKey(organizationId?: string | null): string {
+  return organizationId ?? '__all__';
+}
+
 interface RaffleState {
   forms: DonationForm[];
   currentForm: DonationForm | null;
   ticketTotals: TicketTotalByRaffle[];
   completedRaffleIds: string[];
+  formsScopeKey: string | null;
   isLoading: boolean;
+  isRefreshing: boolean;
   error: string | null;
 
   fetchForms: (organizationId?: string | null) => Promise<void>;
@@ -30,16 +36,34 @@ export const useRaffleStore = create<RaffleState>((set, get) => ({
   currentForm: null,
   ticketTotals: [],
   completedRaffleIds: [],
+  formsScopeKey: null,
   isLoading: false,
+  isRefreshing: false,
   error: null,
 
   fetchForms: async (organizationId?: string | null) => {
-    set({ isLoading: true, error: null });
+    const scopeKey = buildFormsScopeKey(organizationId);
+    const { forms, formsScopeKey } = get();
+    const hasCached = forms.length > 0 && formsScopeKey === scopeKey;
+    const scopeChanged = formsScopeKey !== null && formsScopeKey !== scopeKey;
+
+    set({
+      error: null,
+      isLoading: !hasCached,
+      isRefreshing: hasCached,
+      ...(scopeChanged ? { forms: [] } : {}),
+    });
+
     try {
-      const forms = await raffleApi.getDonationForms(organizationId);
-      set({ forms, isLoading: false });
+      const nextForms = await raffleApi.getDonationForms(organizationId);
+      set({
+        forms: nextForms,
+        formsScopeKey: scopeKey,
+        isLoading: false,
+        isRefreshing: false,
+      });
     } catch (err: any) {
-      set({ error: err.message, isLoading: false });
+      set({ error: err.message, isLoading: false, isRefreshing: false });
     }
   },
 
@@ -130,7 +154,9 @@ export const useRaffleStore = create<RaffleState>((set, get) => ({
       currentForm: null,
       ticketTotals: [],
       completedRaffleIds: [],
+      formsScopeKey: null,
       isLoading: false,
+      isRefreshing: false,
       error: null,
     }),
 }));

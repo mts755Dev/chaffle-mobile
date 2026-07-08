@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   StyleSheet,
@@ -7,7 +7,7 @@ import {
   ScrollView,
 } from 'react-native';
 import { Text, TextInput, Button, Snackbar, Icon } from 'react-native-paper';
-import { useNavigation } from '@react-navigation/native';
+import { useFocusEffect, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -15,6 +15,7 @@ import { z } from 'zod';
 import { COLORS, PASSWORD_REGEX } from '../../constants';
 import { RootStackParamList } from '../../types';
 import { useAuthStore } from '../../store/authStore';
+import { resetToAdminHome } from '../../navigation/resetToAdminHome';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -30,7 +31,7 @@ type LoginFormData = z.infer<typeof loginSchema>;
 
 export default function AdminLoginScreen() {
   const navigation = useNavigation<NavigationProp>();
-  const { login, isAdmin, isLoading, error, clearError, role } = useAuthStore();
+  const { login, isLoading, error, clearError } = useAuthStore();
   const [showPassword, setShowPassword] = useState(false);
 
   const {
@@ -43,24 +44,25 @@ export default function AdminLoginScreen() {
     defaultValues: { email: '', password: '' },
   });
 
-  useEffect(() => {
-    if (isAdmin && role) {
-      if (role === 'worker') {
-        navigation.navigate('WorkerDashboard');
-      } else {
-        navigation.navigate('AdminDashboard');
+  useFocusEffect(
+    useCallback(() => {
+      const { isAdmin, role, error: authError } = useAuthStore.getState();
+      if (isAdmin && role && !authError) {
+        resetToAdminHome(navigation, role);
+      } else if (!isAdmin) {
+        reset();
+        setShowPassword(false);
       }
-    } else if (!isAdmin) {
-      reset();
-      setShowPassword(false);
-    }
-  }, [isAdmin, role]);
+    }, [navigation, reset]),
+  );
 
   const onSubmit = async (data: LoginFormData) => {
     await login(data.email, data.password);
+    const { isAdmin, role, error: authError } = useAuthStore.getState();
+    if (!authError && isAdmin && role) {
+      resetToAdminHome(navigation, role);
+    }
   };
-
-  if (isAdmin) return <View style={styles.flex} />;
 
   return (
     <KeyboardAvoidingView
@@ -74,7 +76,7 @@ export default function AdminLoginScreen() {
       >
         <View style={styles.header}>
           <Icon source="shield-account" size={64} color={COLORS.primary} />
-          <Text style={styles.title}>Admin Login</Text>
+          <Text style={styles.title}>Login</Text>
           <Text style={styles.subtitle}>
             Sign in to manage raffles and tickets
           </Text>

@@ -64,7 +64,9 @@ export default function CountdownTimer({
             ]}
           >
             <Text style={[styles.value, isLight && styles.valueLight]}>
-              {String(block.value).padStart(2, '0')}
+              {Number.isFinite(block.value)
+                ? String(block.value).padStart(2, '0')
+                : '00'}
             </Text>
             <Text style={[styles.blockLabel, isLight && styles.blockLabelLight]}>
               {block.label}

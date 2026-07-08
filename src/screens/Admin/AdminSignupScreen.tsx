@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import {
   View,
   StyleSheet,
@@ -15,6 +15,7 @@ import { z } from 'zod';
 import { COLORS, PASSWORD_REGEX } from '../../constants';
 import { RootStackParamList } from '../../types';
 import { useAuthStore } from '../../store/authStore';
+import { resetToAdminHome } from '../../navigation/resetToAdminHome';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -35,7 +36,7 @@ type SignupFormData = z.infer<typeof signupSchema>;
 
 export default function AdminSignupScreen() {
   const navigation = useNavigation<NavigationProp>();
-  const { signup, isAdmin, isLoading, error, clearError } = useAuthStore();
+  const { signup, isLoading, error, clearError } = useAuthStore();
   const [showPassword, setShowPassword] = useState(false);
 
   const {
@@ -47,14 +48,12 @@ export default function AdminSignupScreen() {
     defaultValues: { organizationName: '', email: '', password: '', confirmPassword: '' },
   });
 
-  useEffect(() => {
-    if (isAdmin) {
-      navigation.navigate('AdminDashboard');
-    }
-  }, [isAdmin]);
-
   const onSubmit = async (data: SignupFormData) => {
     await signup(data.email, data.password, data.organizationName);
+    const { isAdmin, error: authError } = useAuthStore.getState();
+    if (!authError && isAdmin) {
+      resetToAdminHome(navigation, 'org_admin');
+    }
   };
 
   return (

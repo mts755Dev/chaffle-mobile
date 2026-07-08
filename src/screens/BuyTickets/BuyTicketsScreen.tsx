@@ -17,7 +17,6 @@ import {
   Button,
   Checkbox,
   Snackbar,
-  Card,
   Icon,
 } from 'react-native-paper';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
@@ -278,17 +277,32 @@ function BuyTicketsContent() {
           onSelect={handleTierSelect}
         />
 
-        {selectedPrice && (
-          <Card style={styles.summaryCard}>
-            <Card.Content>
+        {selectedPrice ? (
+          <>
+            <View style={styles.feeRow}>
+              <Checkbox.Android
+                status={donateExtra ? 'checked' : 'unchecked'}
+                onPress={() => setDonateExtra(!donateExtra)}
+                color={COLORS.primary}
+                uncheckedColor={COLORS.textSecondary}
+              />
+              <Text
+                style={styles.feeLabel}
+                onPress={() => setDonateExtra(!donateExtra)}
+              >
+                Help support our platform by donating 10%
+              </Text>
+            </View>
+            <View style={styles.selectedSummary}>
               <PaymentChargeSummary
                 baseAmount={selectedPrice}
                 includePlatformFee={donateExtra}
                 channel="online"
+                compact
               />
-            </Card.Content>
-          </Card>
-        )}
+            </View>
+          </>
+        ) : null}
 
         {/* Form Fields */}
         <Text style={styles.sectionTitle}>Your Information</Text>
@@ -508,18 +522,6 @@ function BuyTicketsContent() {
           </Text>
         </View>
 
-        <View style={styles.checkboxRow}>
-          <Checkbox.Android
-            status={donateExtra ? 'checked' : 'unchecked'}
-            onPress={() => setDonateExtra(!donateExtra)}
-            color={COLORS.primary}
-            uncheckedColor={COLORS.textSecondary}
-          />
-          <Text style={styles.checkboxLabel} onPress={() => setDonateExtra(!donateExtra)}>
-            Donate an extra 10% platform fee to support Chaffle
-          </Text>
-        </View>
-
         {/* Submit */}
         <Button
           mode="contained"
@@ -566,16 +568,22 @@ const styles = StyleSheet.create({
     marginTop: 16,
     marginBottom: 12,
   },
-  summaryCard: {
-    backgroundColor: COLORS.primary,
-    borderRadius: 8,
+  feeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
     marginBottom: 8,
+    marginTop: 4,
   },
-  summaryText: {
-    color: '#ffffff',
-    fontSize: 16,
-    fontWeight: '600',
-    textAlign: 'center',
+  feeLabel: {
+    flex: 1,
+    fontSize: 13,
+    color: COLORS.textSecondary,
+  },
+  selectedSummary: {
+    backgroundColor: 'rgba(70,151,175,0.08)',
+    borderRadius: 8,
+    padding: 12,
+    marginBottom: 8,
   },
   input: {
     backgroundColor: COLORS.surface,

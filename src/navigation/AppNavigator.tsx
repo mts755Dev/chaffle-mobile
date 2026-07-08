@@ -136,7 +136,7 @@ export default function AppNavigator() {
         <Stack.Screen
           name="MainTabs"
           component={MainTabs}
-          options={{ headerShown: false }}
+          options={{ headerShown: false, title: 'Main Tabs' }}
         />
         <Stack.Screen
           name="Raffle"
@@ -172,7 +172,11 @@ export default function AppNavigator() {
         <Stack.Screen
           name="AdminDashboard"
           component={AdminDashboardScreen}
-          options={{ title: 'Admin Dashboard' }}
+          options={{
+            title: 'Admin Dashboard',
+            headerBackTitle: 'Main Tabs',
+            headerBackButtonDisplayMode: 'default',
+          }}
         />
         <Stack.Screen
           name="EditRaffle"
@@ -224,7 +228,8 @@ export default function AppNavigator() {
           component={WorkerDashboardScreen}
           options={{
             title: 'Worker Dashboard',
-            headerBackVisible: false,
+            headerBackTitle: 'Main Tabs',
+            headerBackButtonDisplayMode: 'default',
           }}
         />
         <Stack.Screen

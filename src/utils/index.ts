@@ -1,5 +1,54 @@
 import dayjs from 'dayjs';
-import { SUPABASE_URL } from '../constants';
+import customParseFormat from 'dayjs/plugin/customParseFormat';
+import { STORAGE_BUCKET, SUPABASE_URL } from '../constants';
+
+dayjs.extend(customParseFormat);
+
+const DRAW_DATE_FORMATS = [
+  'YYYY-MM-DD',
+  'YYYY/MM/DD',
+  'MM/DD/YYYY',
+  'M/D/YYYY',
+  'MMM D, YYYY',
+  'MMMM D, YYYY',
+] as const;
+
+/**
+ * Parse raffle draw dates reliably.
+ * Bare YYYY-MM-DD is preferred (web date input); falls back to common US formats / ISO.
+ */
+export function parseAppDate(
+  value: string | Date | null | undefined,
+): dayjs.Dayjs | null {
+  if (value == null) return null;
+  if (value instanceof Date) {
+    const d = dayjs(value);
+    return d.isValid() ? d : null;
+  }
+
+  const raw = String(value).trim();
+  if (!raw || raw.toLowerCase() === 'null' || raw.toLowerCase() === 'invalid date') {
+    return null;
+  }
+
+  // Date-only ISO: treat as local calendar day (avoid UTC midnight shift).
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
+    const d = dayjs(raw, 'YYYY-MM-DD', true);
+    return d.isValid() ? d : null;
+  }
+
+  for (const fmt of DRAW_DATE_FORMATS) {
+    const d = dayjs(raw, fmt, true);
+    if (d.isValid()) return d;
+  }
+
+  const fallback = dayjs(raw);
+  return fallback.isValid() ? fallback : null;
+}
+
+export function isValidAppDate(value: string | Date | null | undefined): boolean {
+  return parseAppDate(value) !== null;
+}
 
 /**
  * Format a number as currency
@@ -14,10 +63,14 @@ export function formatCurrency(amount: number): string {
 }
 
 /**
- * Format a date string
+ * Format a date string. Invalid/empty values return "—" (never "Invalid Date").
  */
-export function formatDate(date: string | Date, format: string = 'MMM D, YYYY'): string {
-  return dayjs(date).format(format);
+export function formatDate(
+  date: string | Date | null | undefined,
+  format: string = 'MMM D, YYYY',
+): string {
+  const parsed = parseAppDate(date);
+  return parsed ? parsed.format(format) : '—';
 }
 
 /**
@@ -75,15 +128,26 @@ export function calculatePot(totalAmount: number): number {
 
 /**
  * Resolve an image path to a full URL.
- * Handles relative Supabase storage paths stored in the DB by the web app.
+ * Handles relative Supabase storage paths stored in the DB by the web app
+ * (e.g. /public/<raffleId>/background/<file>).
  */
 export function resolveImageUrl(url: string | null | undefined): string | undefined {
   if (!url) return undefined;
   if (url.startsWith('http://') || url.startsWith('https://')) return url;
   const base = SUPABASE_URL?.replace(/\/$/, '');
   if (!base) return undefined;
-  const path = url.startsWith('/') ? url : `/${url}`;
-  return `${base}/storage/v1/object/${path}`;
+
+  // Paths already include /object/... should not double-prefix.
+  if (url.includes('/storage/v1/object/')) {
+    return url.startsWith('http') ? url : `${base}${url.startsWith('/') ? '' : '/'}${url}`;
+  }
+
+  let path = url.startsWith('/') ? url.slice(1) : url;
+  // Web loader serves as /object/public/<bucket>/<src>
+  if (!path.startsWith('public/') && !path.startsWith(`${STORAGE_BUCKET}/`)) {
+    // Legacy relative paths without bucket — treat as object key under public bucket.
+  }
+  return `${base}/storage/v1/object/public/${STORAGE_BUCKET}/${path}`;
 }
 
 /**

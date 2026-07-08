@@ -4,6 +4,12 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { isSuperAdmin } from "../_shared/drawAuth.ts";
+import {
+  adminDeleteAuthUser,
+  deleteWorkerRecord,
+  isWorkerExpiredAt,
+  purgeExpiredWorkers,
+} from "../_shared/workerLifecycle.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -33,7 +39,7 @@ async function findWorkerByEmail(
 ) {
   const { data, error } = await adminClient
     .from("worker")
-    .select("id, raffle_id, expires_at, email")
+    .select("id, raffle_id, expires_at, email, user_id")
     .ilike("email", email)
     .limit(1);
 
@@ -105,31 +111,6 @@ async function adminCreateUser(
   }
 
   return { id: body.id };
-}
-
-async function adminDeleteUser(
-  supabaseUrl: string,
-  serviceRoleKey: string,
-  userId: string,
-): Promise<void> {
-  const response = await fetch(`${supabaseUrl}/auth/v1/admin/users/${userId}`, {
-    method: "DELETE",
-    headers: {
-      Authorization: `Bearer ${serviceRoleKey}`,
-      apikey: serviceRoleKey,
-    },
-  });
-
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    const message =
-      body?.msg ||
-      body?.message ||
-      body?.error_description ||
-      body?.error ||
-      `Failed to delete auth user (${response.status})`;
-    throw new Error(String(message));
-  }
 }
 
 async function insertWorkerProfile(
@@ -258,6 +239,10 @@ Deno.serve(async (req: Request) => {
       resolvedOrganizationId = organizationIdParam;
     }
 
+    await purgeExpiredWorkers(adminClient, supabaseUrl, serviceRole, {
+      email,
+    });
+
     let existingWorker;
     try {
       existingWorker = await findWorkerByEmail(adminClient, email);
@@ -270,10 +255,19 @@ Deno.serve(async (req: Request) => {
     }
 
     if (existingWorker) {
-      return jsonResponse(
-        { error: duplicateWorkerMessage(existingWorker.raffle_id, raffleId) },
-        400,
-      );
+      if (isWorkerExpiredAt(existingWorker.expires_at)) {
+        await deleteWorkerRecord(
+          adminClient,
+          existingWorker,
+          supabaseUrl,
+          serviceRole,
+        );
+      } else {
+        return jsonResponse(
+          { error: duplicateWorkerMessage(existingWorker.raffle_id, raffleId) },
+          400,
+        );
+      }
     }
 
     const expiresAt = new Date(
@@ -323,7 +317,7 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ worker: workerRow });
     } catch (workerInsertError: unknown) {
       try {
-        await adminDeleteUser(supabaseUrl, serviceRole, authUserId);
+        await adminDeleteAuthUser(supabaseUrl, serviceRole, authUserId);
       } catch {
         // Best effort rollback if profile insert fails.
       }

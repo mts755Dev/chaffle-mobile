@@ -16,24 +16,44 @@ import { formatCurrency, shortId, formatDate } from '../../../utils';
 import LoadingScreen from '../../../components/LoadingScreen';
 
 export default function AdminTicketsScreen() {
-  const { tickets, isLoading, fetchPaidTickets } = useTicketStore();
+  const { tickets, isLoading, isRefreshing, fetchPaidTickets } = useTicketStore();
   const { role, organizationId } = useAuthStore();
-  const { forms } = useRaffleStore();
+  const { fetchForms } = useRaffleStore();
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
 
-  const isOrgAdmin = role === 'org_admin';
-  const orgRaffleIds = isOrgAdmin ? forms.map((f) => f.id) : undefined;
+  const loadTickets = useCallback(async () => {
+    // Any organization-scoped account (every org_admin / worker with an org)
+    // only sees tickets from that organization's raffles — not platform-wide.
+    const isOrgScoped =
+      role === 'org_admin' ||
+      role === 'worker' ||
+      (!!organizationId && role !== 'super_admin');
+
+    if (isOrgScoped) {
+      if (!organizationId) {
+        await fetchPaidTickets([]);
+        return;
+      }
+      await fetchForms(organizationId);
+      const raffleIds = useRaffleStore.getState().forms.map((f) => f.id);
+      await fetchPaidTickets(raffleIds);
+      return;
+    }
+
+    // Super admin (no org scope): all paid tickets
+    await fetchPaidTickets(undefined);
+  }, [role, organizationId, fetchForms, fetchPaidTickets]);
 
   useFocusEffect(
     useCallback(() => {
-      fetchPaidTickets(orgRaffleIds);
-    }, [organizationId]),
+      void loadTickets();
+    }, [loadTickets]),
   );
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await fetchPaidTickets(orgRaffleIds);
+    await loadTickets();
     setRefreshing(false);
   };
 
@@ -148,7 +168,7 @@ export default function AdminTicketsScreen() {
     );
   };
 
-  if (isLoading && tickets.length === 0) {
+  if (isLoading && !isRefreshing && tickets.length === 0) {
     return <LoadingScreen message="Loading tickets..." />;
   }
 

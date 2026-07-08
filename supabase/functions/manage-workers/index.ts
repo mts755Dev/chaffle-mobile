@@ -4,6 +4,11 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { isSuperAdmin } from "../_shared/drawAuth.ts";
+import { callerCanAccessRaffleWorkers } from "../_shared/workerAccess.ts";
+import {
+  isWorkerExpiredAt,
+  purgeExpiredWorkers,
+} from "../_shared/workerLifecycle.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -25,57 +30,6 @@ function getAdminClient(serviceRoleKey: string) {
       persistSession: false,
     },
   });
-}
-
-async function callerOwnsOrganization(
-  adminClient: ReturnType<typeof getAdminClient>,
-  organizationId: string,
-  userId: string,
-): Promise<boolean> {
-  const { data, error } = await adminClient
-    .from("organization")
-    .select("id")
-    .eq("id", organizationId)
-    .eq("owner_id", userId)
-    .maybeSingle();
-
-  return !error && !!data;
-}
-
-async function callerCanAccessRaffleWorkers(
-  adminClient: ReturnType<typeof getAdminClient>,
-  raffleId: string,
-  user: { id: string },
-  callerIsSuperAdmin: boolean,
-): Promise<{ allowed: boolean; organizationId: string | null }> {
-  const { data: raffle, error } = await adminClient
-    .from("donation_form")
-    .select("id, organization_id")
-    .eq("id", raffleId)
-    .single();
-
-  if (error || !raffle) {
-    return { allowed: false, organizationId: null };
-  }
-
-  if (callerIsSuperAdmin) {
-    return { allowed: true, organizationId: raffle.organization_id ?? null };
-  }
-
-  if (!raffle.organization_id) {
-    return { allowed: false, organizationId: null };
-  }
-
-  const ownsOrg = await callerOwnsOrganization(
-    adminClient,
-    raffle.organization_id,
-    user.id,
-  );
-
-  return {
-    allowed: ownsOrg,
-    organizationId: ownsOrg ? raffle.organization_id : null,
-  };
 }
 
 Deno.serve(async (req: Request) => {
@@ -111,6 +65,22 @@ Deno.serve(async (req: Request) => {
     const action = String(body?.action || "");
     const callerIsSuperAdmin = isSuperAdmin(user);
 
+    if (action === "purge-expired-self") {
+      const expiresAt = user.user_metadata?.expires_at as string | undefined;
+      if (!isWorkerExpiredAt(expiresAt)) {
+        return jsonResponse({ success: true, purged: false });
+      }
+
+      const purged = await purgeExpiredWorkers(
+        adminClient,
+        supabaseUrl,
+        serviceRole,
+        { userId: user.id },
+      );
+
+      return jsonResponse({ success: true, purged: purged > 0 });
+    }
+
     if (action === "list-by-raffle") {
       const raffleId = String(body?.raffleId || "").trim();
       if (!raffleId) {
@@ -127,6 +97,10 @@ Deno.serve(async (req: Request) => {
       if (!access.allowed) {
         return jsonResponse({ error: "You cannot view workers for this raffle" }, 403);
       }
+
+      await purgeExpiredWorkers(adminClient, supabaseUrl, serviceRole, {
+        raffleId,
+      });
 
       const { data, error } = await adminClient
         .from("worker")

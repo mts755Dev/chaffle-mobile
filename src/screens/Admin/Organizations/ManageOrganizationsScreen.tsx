@@ -1,4 +1,4 @@
-import React, { useCallback, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   View,
   StyleSheet,
@@ -46,35 +46,66 @@ function statusChipStyle(status: OrgApprovalStatus | undefined) {
 
 export default function ManageOrganizationsScreen() {
   const { user } = useAuthStore();
-  const [organizations, setOrganizations] = useState<OrganizationRecord[]>([]);
   const [filter, setFilter] = useState<FilterOption>('pending');
+  const [dataByFilter, setDataByFilter] = useState<
+    Record<FilterOption, OrganizationRecord[]>
+  >({
+    pending: [],
+    approved: [],
+    rejected: [],
+    terminated: [],
+    all: [],
+  });
+  const loadedFiltersRef = useRef<Set<FilterOption>>(new Set());
   const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [actingOnId, setActingOnId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const loadOrganizations = useCallback(async () => {
+  const organizations = dataByFilter[filter];
+  const filterLoaded = loadedFiltersRef.current.has(filter);
+
+  const loadOrganizations = useCallback(async (targetFilter: FilterOption = filter) => {
     setError(null);
+    const hasCached = loadedFiltersRef.current.has(targetFilter);
+
+    if (targetFilter === filter) {
+      setIsLoading(!hasCached);
+      setIsRefreshing(hasCached);
+    }
+
     try {
-      const rows = await organizationApi.listOrganizations(filter);
-      setOrganizations(rows);
+      const rows = await organizationApi.listOrganizations(targetFilter);
+      setDataByFilter((prev) => ({ ...prev, [targetFilter]: rows }));
+      loadedFiltersRef.current.add(targetFilter);
     } catch (err: any) {
       setError(err.message || 'Failed to load organizations');
     } finally {
-      setIsLoading(false);
+      if (targetFilter === filter) {
+        setIsLoading(false);
+        setIsRefreshing(false);
+      }
     }
   }, [filter]);
 
   useFocusEffect(
     useCallback(() => {
-      setIsLoading(true);
-      void loadOrganizations();
-    }, [loadOrganizations]),
+      void loadOrganizations(filter);
+    }, [filter, loadOrganizations]),
   );
+
+  const onFilterChange = (nextFilter: FilterOption) => {
+    if (nextFilter === filter) return;
+    const hasCached = loadedFiltersRef.current.has(nextFilter);
+    setIsLoading(!hasCached);
+    setIsRefreshing(hasCached);
+    setFilter(nextFilter);
+  };
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await loadOrganizations();
+    await loadOrganizations(filter);
     setRefreshing(false);
   };
 
@@ -216,39 +247,48 @@ export default function ManageOrganizationsScreen() {
     );
   };
 
-  if (isLoading && organizations.length === 0) {
-    return <LoadingScreen message="Loading organizations..." />;
+  const renderFilterTabs = () => (
+    <View style={styles.filterWrap}>
+      <View style={styles.filterTabs}>
+        {FILTER_OPTIONS.map((option) => {
+          const selected = filter === option.value;
+          return (
+            <TouchableOpacity
+              key={option.value}
+              style={[styles.filterTab, selected && styles.filterTabSelected]}
+              activeOpacity={0.75}
+              onPress={() => onFilterChange(option.value)}
+            >
+              <Text
+                style={[
+                  styles.filterTabLabel,
+                  selected && styles.filterTabLabelSelected,
+                ]}
+                numberOfLines={1}
+                adjustsFontSizeToFit
+                minimumFontScale={0.8}
+              >
+                {option.label}
+              </Text>
+            </TouchableOpacity>
+          );
+        })}
+      </View>
+    </View>
+  );
+
+  if (isLoading && !isRefreshing && organizations.length === 0) {
+    return (
+      <View style={styles.container}>
+        {renderFilterTabs()}
+        <LoadingScreen message="Loading organizations..." />
+      </View>
+    );
   }
 
   return (
     <View style={styles.container}>
-      <View style={styles.filterWrap}>
-        <View style={styles.filterTabs}>
-          {FILTER_OPTIONS.map((option) => {
-            const selected = filter === option.value;
-            return (
-              <TouchableOpacity
-                key={option.value}
-                style={[styles.filterTab, selected && styles.filterTabSelected]}
-                activeOpacity={0.75}
-                onPress={() => setFilter(option.value)}
-              >
-                <Text
-                  style={[
-                    styles.filterTabLabel,
-                    selected && styles.filterTabLabelSelected,
-                  ]}
-                  numberOfLines={1}
-                  adjustsFontSizeToFit
-                  minimumFontScale={0.8}
-                >
-                  {option.label}
-                </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-      </View>
+      {renderFilterTabs()}
 
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
@@ -261,14 +301,16 @@ export default function ManageOrganizationsScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
         ListEmptyComponent={
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyTitle}>No organizations</Text>
-            <Text style={styles.emptyText}>
-              {filter === 'pending'
-                ? 'No organizations are waiting for approval.'
-                : 'Nothing to show for this filter.'}
-            </Text>
-          </View>
+          filterLoaded && !isLoading ? (
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyTitle}>No organizations</Text>
+              <Text style={styles.emptyText}>
+                {filter === 'pending'
+                  ? 'No organizations are waiting for approval.'
+                  : 'Nothing to show for this filter.'}
+              </Text>
+            </View>
+          ) : null
         }
       />
     </View>

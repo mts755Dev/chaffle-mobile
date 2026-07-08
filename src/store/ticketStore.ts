@@ -8,36 +8,77 @@ export interface EnrichedWinnerTicket extends Ticket {
   estimatedAmount?: number;
 }
 
+function buildScopeKey(raffleIds?: string[]): string {
+  if (raffleIds === undefined) return '__all__';
+  if (raffleIds.length === 0) return '__none__';
+  return raffleIds.slice().sort().join('|');
+}
+
 interface TicketState {
   tickets: Ticket[];
   winnerTickets: EnrichedWinnerTicket[];
+  ticketsScopeKey: string | null;
+  winnerTicketsScopeKey: string | null;
   isLoading: boolean;
+  isRefreshing: boolean;
   error: string | null;
 
   fetchPaidTickets: (raffleIds?: string[]) => Promise<void>;
   fetchWinnerTickets: (raffleIds?: string[]) => Promise<void>;
   fetchTicketsByRaffle: (raffleId: string) => Promise<Ticket[]>;
   clearError: () => void;
+  reset: () => void;
 }
 
-export const useTicketStore = create<TicketState>((set) => ({
+export const useTicketStore = create<TicketState>((set, get) => ({
   tickets: [],
   winnerTickets: [],
+  ticketsScopeKey: null,
+  winnerTicketsScopeKey: null,
   isLoading: false,
+  isRefreshing: false,
   error: null,
 
   fetchPaidTickets: async (raffleIds?: string[]) => {
-    set({ isLoading: true, error: null });
+    const scopeKey = buildScopeKey(raffleIds);
+    const { tickets, ticketsScopeKey } = get();
+    const hasCached = tickets.length > 0 && ticketsScopeKey === scopeKey;
+    const scopeChanged = ticketsScopeKey !== null && ticketsScopeKey !== scopeKey;
+
+    set({
+      error: null,
+      isLoading: !hasCached,
+      isRefreshing: hasCached,
+      ...(scopeChanged ? { tickets: [] } : {}),
+    });
+
     try {
-      const tickets = await ticketApi.getPaidTickets(raffleIds);
-      set({ tickets, isLoading: false });
+      const nextTickets = await ticketApi.getPaidTickets(raffleIds);
+      set({
+        tickets: nextTickets,
+        ticketsScopeKey: scopeKey,
+        isLoading: false,
+        isRefreshing: false,
+      });
     } catch (err: any) {
-      set({ error: err.message, isLoading: false });
+      set({ error: err.message, isLoading: false, isRefreshing: false });
     }
   },
 
   fetchWinnerTickets: async (raffleIds?: string[]) => {
-    set({ isLoading: true, error: null });
+    const scopeKey = buildScopeKey(raffleIds);
+    const { winnerTickets, winnerTicketsScopeKey } = get();
+    const hasCached = winnerTickets.length > 0 && winnerTicketsScopeKey === scopeKey;
+    const scopeChanged =
+      winnerTicketsScopeKey !== null && winnerTicketsScopeKey !== scopeKey;
+
+    set({
+      error: null,
+      isLoading: !hasCached,
+      isRefreshing: hasCached,
+      ...(scopeChanged ? { winnerTickets: [] } : {}),
+    });
+
     try {
       const rawWinners = await ticketApi.getWinnerTickets(raffleIds);
 
@@ -67,9 +108,14 @@ export const useTicketStore = create<TicketState>((set) => ({
         };
       });
 
-      set({ winnerTickets: enriched, isLoading: false });
+      set({
+        winnerTickets: enriched,
+        winnerTicketsScopeKey: scopeKey,
+        isLoading: false,
+        isRefreshing: false,
+      });
     } catch (err: any) {
-      set({ error: err.message, isLoading: false });
+      set({ error: err.message, isLoading: false, isRefreshing: false });
     }
   },
 
@@ -82,4 +128,15 @@ export const useTicketStore = create<TicketState>((set) => ({
   },
 
   clearError: () => set({ error: null }),
+
+  reset: () =>
+    set({
+      tickets: [],
+      winnerTickets: [],
+      ticketsScopeKey: null,
+      winnerTicketsScopeKey: null,
+      isLoading: false,
+      isRefreshing: false,
+      error: null,
+    }),
 }));

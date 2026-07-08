@@ -16,7 +16,7 @@ import { COLORS } from '../../constants';
 import { RootStackParamList } from '../../types';
 import { ticketApi, raffleApi } from '../../services/api/raffleApi';
 import { useLocation } from '../../hooks/useLocation';
-import { getPublicIp } from '../../utils';
+import { getPublicIp, parseAppDate } from '../../utils';
 import LoadingScreen from '../../components/LoadingScreen';
 import GeoRestrictedScreen from '../../components/GeoRestrictedScreen';
 
@@ -69,7 +69,8 @@ export default function FreeTicketScreen() {
       }
 
       // Check if draw date has passed
-      if (form.draw_date && new Date(form.draw_date) < new Date()) {
+      const drawDate = parseAppDate(form.draw_date);
+      if (drawDate && drawDate.isBefore(new Date())) {
         setError('This raffle has ended');
         setIsChecking(false);
         return;

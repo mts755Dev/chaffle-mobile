@@ -2,6 +2,7 @@ import { create } from 'zustand';
 import { supabase } from '../services/supabase/client';
 import { clearTapToPayTermsSession } from '../services/tapToPayTermsState';
 import { useRaffleStore } from './raffleStore';
+import { useTicketStore } from './ticketStore';
 import { deriveAdminRole, isSuperAdminUser } from '../utils/authRoles';
 import type { User, Session } from '@supabase/supabase-js';
 import type { AdminRole, OrgApprovalStatus } from '../types';
@@ -55,6 +56,20 @@ function readMetadataRole(user: User | null): string | undefined {
 
 function deriveRole(user: User | null): AdminRole | null {
   return deriveAdminRole(user);
+}
+
+async function prefetchAdminHomeData(user: User) {
+  const role = deriveRole(user);
+  if (role === 'super_admin') {
+    await useRaffleStore.getState().fetchForms(undefined);
+    return;
+  }
+  if (role === 'org_admin') {
+    const orgId = deriveOrgId(user);
+    if (orgId) {
+      await useRaffleStore.getState().fetchForms(orgId);
+    }
+  }
 }
 
 function deriveOrgId(user: User | null): string | null {
@@ -126,6 +141,16 @@ function isWorkerExpired(user: User | null): boolean {
   return new Date(expiresAt) < new Date();
 }
 
+async function purgeExpiredWorkerAccount(): Promise<void> {
+  try {
+    await supabase.functions.invoke('manage-workers', {
+      body: { action: 'purge-expired-self' },
+    });
+  } catch {
+    // Best effort — login will still be blocked if purge fails.
+  }
+}
+
 async function fetchOrgState(orgId: string): Promise<{
   id: string | null;
   connected: boolean;
@@ -140,9 +165,13 @@ async function fetchOrgState(orgId: string): Promise<{
   if (!data) {
     return { id: null, connected: false, name: null, approvalStatus: null };
   }
+  const stripeJson = data.stripe_account_json as { charges_enabled?: boolean; id?: string } | null;
+  const connected =
+    !!stripeJson?.charges_enabled ||
+    !!(data.stripe_account_id && stripeJson?.id);
   return {
     id: data.stripe_account_id ?? null,
-    connected: !!(data.stripe_account_json as any)?.charges_enabled,
+    connected,
     name: data.name ?? null,
     approvalStatus: (data.approval_status as OrgApprovalStatus) ?? 'pending',
   };
@@ -221,6 +250,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         let session = data.session;
 
         if (deriveRole(user) === 'worker' && isWorkerExpired(user)) {
+          await purgeExpiredWorkerAccount();
           await supabase.auth.signOut();
           set({ isLoading: false, error: 'Your worker account has expired' });
           return;
@@ -243,6 +273,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           orgState = await fetchOrgState(orgId);
         }
 
+        if (user) {
+          await prefetchAdminHomeData(user);
+        }
+
         set({
           ...buildAuthPatch(user, session, orgState),
           isLoading: false,
@@ -259,8 +293,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           const user = session?.user ?? null;
 
           if (user && deriveRole(user) === 'worker' && isWorkerExpired(user)) {
+            await purgeExpiredWorkerAccount();
             await supabase.auth.signOut();
             useRaffleStore.getState().reset();
+            useTicketStore.getState().reset();
             set({
               user: null,
               session: null,
@@ -312,7 +348,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   login: async (email: string, password: string) => {
     authFlowInProgress = true;
-    useRaffleStore.getState().reset();
     set({ isLoading: true, error: null });
     try {
       const normalizedEmail = email.trim().toLowerCase();
@@ -329,6 +364,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       let user = data.user;
 
       if (deriveRole(user) === 'worker' && isWorkerExpired(user)) {
+        await purgeExpiredWorkerAccount();
         await supabase.auth.signOut();
         set({ error: 'Your worker account has expired', isLoading: false });
         return;
@@ -378,6 +414,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         loginOrgState = await fetchOrgState(loginOrgId);
       }
 
+      await prefetchAdminHomeData(user);
+
       set({
         ...buildAuthPatch(user, synced.session ?? refreshed.session, loginOrgState),
         isLoading: false,
@@ -391,7 +429,6 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
   signup: async (email: string, password: string, organizationName: string) => {
     authFlowInProgress = true;
-    useRaffleStore.getState().reset();
     set({ isLoading: true, error: null });
     try {
       const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
@@ -451,6 +488,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       );
 
       const signupOrgState = await fetchOrgState(orgData.id);
+
+      await prefetchAdminHomeData(refreshed.user);
 
       set({
         ...buildAuthPatch(refreshed.user, refreshed.session, signupOrgState, {
@@ -571,6 +610,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       await supabase.auth.signOut();
       clearTapToPayTermsSession();
       useRaffleStore.getState().reset();
+      useTicketStore.getState().reset();
       set({
         user: null,
         session: null,

@@ -28,8 +28,9 @@ import { useAuthStore } from '../../../store/authStore';
 import { stripeApi } from '../../../services/api/stripeApi';
 import { secureLinkApi } from '../../../services/api/raffleApi';
 import { useImageUpload } from '../../../hooks/useImageUpload';
-import { resolveImageUrl } from '../../../utils';
+import { resolveImageUrl, isValidAppDate, parseAppDate } from '../../../utils';
 import LoadingScreen from '../../../components/LoadingScreen';
+import RaffleOrganizationAssignCard from '../../../components/RaffleOrganizationAssignCard';
 import * as Clipboard from 'expo-clipboard';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -57,6 +58,7 @@ export default function EditRaffleScreen() {
     useRaffleStore();
   const { role, organizationId: authOrganizationId } = useAuthStore();
   const isOrgAdmin = role === 'org_admin';
+  const isSuperAdmin = role === 'super_admin';
   const { pickImage, uploadImage, isUploading } = useImageUpload();
 
   const [raffleId, setRaffleId] = useState<string | undefined>(route.params.id);
@@ -117,12 +119,51 @@ export default function EditRaffleScreen() {
       newErrors.rules = 'Rules must be at least 5 characters';
     if (!form.draw_date) {
       newErrors.draw_date = 'Draw date is required';
-    } else if (new Date(form.draw_date) < new Date()) {
-      newErrors.draw_date = 'Draw date must be in the future';
+    } else if (!isValidAppDate(form.draw_date)) {
+      newErrors.draw_date = 'Use format YYYY-MM-DD (e.g. 2026-07-15)';
+    } else {
+      const parsed = parseAppDate(form.draw_date)!;
+      if (parsed.endOf('day').isBefore(new Date())) {
+        newErrors.draw_date = 'Draw date must be in the future';
+      }
     }
     if (!form.raffleLocation) newErrors.raffleLocation = 'Location is required';
     setErrors(newErrors);
     return Object.keys(newErrors).length === 0;
+  };
+
+  const buildFormPayload = () => {
+    const normalizedDrawDate =
+      parseAppDate(form.draw_date)?.format('YYYY-MM-DD') ?? form.draw_date;
+
+    return {
+      title: form.title,
+      charity_info: form.charity_info,
+      rules: form.rules,
+      draw_date: normalizedDrawDate,
+      raffleLocation: form.raffleLocation,
+      backgroundImage: form.backgroundImage,
+    };
+  };
+
+  const ensureRaffleId = async (): Promise<string | null> => {
+    if (raffleId) return raffleId;
+
+    if (!validate()) {
+      setSnackMessage('Complete the required raffle fields before uploading an image');
+      return null;
+    }
+
+    try {
+      const created = await createForm(createOrganizationId, buildFormPayload());
+      setRaffleId(created.id);
+      setIsCreateMode(false);
+      navigation.setOptions({ title: 'Edit Raffle' });
+      return created.id;
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Failed to create raffle');
+      return null;
+    }
   };
 
   const handleSave = async () => {
@@ -131,27 +172,20 @@ export default function EditRaffleScreen() {
       return;
     }
 
-    const formData = {
-      title: form.title,
-      charity_info: form.charity_info,
-      rules: form.rules,
-      draw_date: form.draw_date,
-      raffleLocation: form.raffleLocation,
-      backgroundImage: form.backgroundImage,
-    };
+    const formData = buildFormPayload();
 
     setIsSaving(true);
     try {
-      if (isCreateMode) {
-        await createForm(createOrganizationId, formData);
-        setReturnToDashboardOnDismiss(true);
-        setSnackMessage('Raffle created successfully!');
-      } else if (raffleId) {
+      if (raffleId) {
         await updateForm({
           id: raffleId,
           ...formData,
         });
         setSnackMessage('Raffle saved successfully!');
+      } else {
+        await createForm(createOrganizationId, formData);
+        setReturnToDashboardOnDismiss(true);
+        setSnackMessage('Raffle created successfully!');
       }
     } catch (err: any) {
       Alert.alert('Error', err.message || 'Failed to save');
@@ -161,13 +195,28 @@ export default function EditRaffleScreen() {
   };
 
   const handleImageUpload = async () => {
-    const uri = await pickImage();
-    if (!uri) return;
+    const activeRaffleId = await ensureRaffleId();
+    if (!activeRaffleId) return;
 
-    const publicUrl = await uploadImage(uri);
-    if (publicUrl) {
-      setForm((prev) => ({ ...prev, backgroundImage: publicUrl }));
+    const picked = await pickImage();
+    if (!picked) return;
+
+    const storedPath = await uploadImage(picked.uri, {
+      raffleId: activeRaffleId,
+      isBackground: true,
+      mimeType: picked.mimeType,
+    });
+    if (!storedPath) return;
+
+    try {
+      await updateForm({
+        id: activeRaffleId,
+        backgroundImage: storedPath,
+      });
+      setForm((prev) => ({ ...prev, backgroundImage: storedPath }));
       setSnackMessage('Image uploaded!');
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Image uploaded but failed to save on the raffle');
     }
   };
 
@@ -322,6 +371,19 @@ export default function EditRaffleScreen() {
             </Card.Content>
           </Card>
         )}
+
+        {isSuperAdmin && !isCreateMode && raffleId ? (
+          <RaffleOrganizationAssignCard
+            raffleId={raffleId}
+            form={form as DonationForm}
+            onUpdated={(patch) => {
+              setForm((prev) => ({ ...prev, ...patch }));
+              if (currentForm) {
+                setCurrentForm({ ...currentForm, ...patch } as DonationForm);
+              }
+            }}
+          />
+        ) : null}
 
         {/* Form Fields — matches web: Title, Draw Date, Location, Raffle Info, Free Ticket Link, Rules, Submit */}
         <Card style={styles.card}>
@@ -496,7 +558,7 @@ export default function EditRaffleScreen() {
               mode="contained-tonal"
               onPress={handleImageUpload}
               loading={isUploading}
-              disabled={isUploading}
+              disabled={isUploading || isSaving}
               icon="camera"
               style={styles.uploadButton}
             >
@@ -669,6 +731,12 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: COLORS.textLight,
     marginTop: 8,
+  },
+  imageHelperText: {
+    fontSize: 13,
+    color: COLORS.textSecondary,
+    marginBottom: 12,
+    lineHeight: 18,
   },
   uploadButton: {
     borderRadius: 8,

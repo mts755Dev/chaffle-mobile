@@ -25,7 +25,8 @@ import { useAuthStore } from '../../../store/authStore';
 import { blockWorkerFromForeignRaffle } from '../../../utils/workerAccess';
 import {
   canUseInPersonPayment,
-  isOrgTapToPayReady,
+  isTapToPayPaymentReady,
+  resolveTapToPayOrganizationId,
   showOrgStripeRequiredAlert,
   usesOrganizationStripe,
 } from '../../../utils/tapToPayAccess';
@@ -108,18 +109,30 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
   const route = useRoute<InPersonPaymentRouteProp>();
   const navigation = useNavigation<NavigationProp>();
   const { id } = route.params;
-  const { isAdmin, role, orgStripeConnected, orgStripeAccountId } = useAuthStore();
+  const {
+    isAdmin,
+    role,
+    organizationId,
+    orgStripeConnected,
+    orgStripeAccountId,
+  } = useAuthStore();
 
   const stripeAccountId = (raffle.stripeAccount as any)?.id as string | undefined;
   const merchantDisplayName = raffle.title?.trim() || 'Raffle';
   useStripeTerminalAccountScope(stripeAccountId);
 
-  const orgStripeReady = isOrgTapToPayReady(
+  const tapToPayOrgId = resolveTapToPayOrganizationId(
+    raffle.organization_id,
+    organizationId,
+  );
+  const orgStripeReady = isTapToPayPaymentReady(
     role,
     orgStripeConnected,
     orgStripeAccountId,
+    tapToPayOrgId,
+    raffle.stripeAccount,
   );
-  const isOrgScoped = usesOrganizationStripe(role);
+  const isOrgScoped = usesOrganizationStripe(role, tapToPayOrgId);
 
   useEffect(() => {
     if (isOrgScoped && !orgStripeReady) {
@@ -135,19 +148,45 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
         [{ text: 'OK', onPress: () => navigation.goBack() }],
       );
     }
-  }, [stripeAccountId, isOrgScoped, orgStripeReady, navigation]);
+  }, [stripeAccountId, isOrgScoped, orgStripeReady, role, navigation]);
 
   useEffect(() => {
-    if (!canUseInPersonPayment(isAdmin, role, orgStripeConnected, orgStripeAccountId)) {
+    if (
+      !canUseInPersonPayment(
+        isAdmin,
+        role,
+        orgStripeConnected,
+        orgStripeAccountId,
+        tapToPayOrgId,
+        raffle.stripeAccount,
+      )
+    ) {
       navigation.goBack();
     }
-  }, [isAdmin, role, orgStripeConnected, orgStripeAccountId, navigation]);
+  }, [
+    isAdmin,
+    role,
+    orgStripeConnected,
+    orgStripeAccountId,
+    tapToPayOrgId,
+    raffle.stripeAccount,
+    navigation,
+  ]);
 
-  if (!canUseInPersonPayment(isAdmin, role, orgStripeConnected, orgStripeAccountId)) {
+  if (
+    !canUseInPersonPayment(
+      isAdmin,
+      role,
+      orgStripeConnected,
+      orgStripeAccountId,
+      tapToPayOrgId,
+      raffle.stripeAccount,
+    )
+  ) {
     return null;
   }
 
-  if ((isOrgScoped && !orgStripeReady) || !stripeAccountId) {
+  if (!orgStripeReady || !stripeAccountId) {
     return null;
   }
 

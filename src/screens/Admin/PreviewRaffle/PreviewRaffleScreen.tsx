@@ -37,6 +37,7 @@ import {
   formatCurrency,
   calculatePot,
   formatDate,
+  parseAppDate,
   stripHtml,
   resolveImageUrl,
   getTicketReferenceId,
@@ -186,9 +187,8 @@ export default function PreviewRaffleScreen() {
   const totalAmount = ticketTotal?._sum.amount || 0;
   const totalQty = ticketTotal?._sum.quantity || 0;
   const potAmount = calculatePot(totalAmount);
-  const isExpired = donationForm.draw_date
-    ? new Date(donationForm.draw_date) < new Date()
-    : false;
+  const drawDate = parseAppDate(donationForm.draw_date);
+  const isExpired = drawDate ? drawDate.isBefore(new Date()) : false;
   const stripeAccountId = (donationForm.stripeAccount as any)?.id;
   const hasStripe = !!stripeAccountId;
   const showManualDrawButton = !winnerTicket && canManualDrawRaffle(role);
@@ -258,7 +258,7 @@ export default function PreviewRaffleScreen() {
                   <Text style={styles.metaText}>{donationForm.raffleLocation}</Text>
                 </View>
               ) : null}
-              {donationForm.draw_date ? (
+              {drawDate ? (
                 <View style={styles.metaItem}>
                   <Icon source="calendar-outline" size={14} color="rgba(255,255,255,0.85)" />
                   <Text style={styles.metaText}>
@@ -310,13 +310,7 @@ export default function PreviewRaffleScreen() {
             </Text>
             <View style={styles.tileDivider} />
             <Text style={styles.tileValue}>
-              {donationForm.draw_date
-                ? new Date(donationForm.draw_date).toLocaleDateString('en-US', {
-                    month: 'short',
-                    day: 'numeric',
-                    year: 'numeric',
-                  })
-                : '—'}
+              {drawDate ? formatDate(donationForm.draw_date, 'MMM D, YYYY') : '—'}
             </Text>
           </Surface>
 
@@ -349,7 +343,7 @@ export default function PreviewRaffleScreen() {
                 </Text>
                 <Text style={styles.tileSublabel}>Winner Ticket</Text>
               </>
-            ) : !isExpired && donationForm.draw_date ? (
+            ) : !isExpired && drawDate ? (
               <>
                 <Icon source="clock-outline" size={28} color={COLORS.white} />
                 <Text style={styles.tileLabelTop}>Time Left</Text>
@@ -439,7 +433,7 @@ export default function PreviewRaffleScreen() {
             <View style={styles.detailRow}>
               <Text style={styles.detailLabel}>Draw Date</Text>
               <Text style={styles.detailValue}>
-                {donationForm.draw_date
+                {drawDate
                   ? formatDate(donationForm.draw_date, 'MMMM D, YYYY')
                   : '—'}
               </Text>

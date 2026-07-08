@@ -328,12 +328,17 @@ export const ticketApi = {
 
   // Get paid tickets (admin) — optionally scoped to specific raffle IDs
   getPaidTickets: async (raffleIds?: string[]): Promise<Ticket[]> => {
+    // undefined = no org scope (super admin). [] = explicitly no raffles → empty.
+    if (raffleIds !== undefined && raffleIds.length === 0) {
+      return [];
+    }
+
     let query = supabase
       .from('ticket')
       .select('*, donation_form(title)')
       .eq('paid', true);
 
-    if (raffleIds && raffleIds.length > 0) {
+    if (raffleIds !== undefined) {
       query = query.in('donation_formId', raffleIds);
     }
 
@@ -344,12 +349,17 @@ export const ticketApi = {
 
   // Get winner tickets (admin) — optionally scoped to specific raffle IDs
   getWinnerTickets: async (raffleIds?: string[]): Promise<Ticket[]> => {
+    // undefined = no org scope (super admin). [] = explicitly no raffles → empty.
+    if (raffleIds !== undefined && raffleIds.length === 0) {
+      return [];
+    }
+
     let query = supabase
       .from('ticket')
       .select('*, donation_form(title, id)')
       .eq('isWinner', true);
 
-    if (raffleIds && raffleIds.length > 0) {
+    if (raffleIds !== undefined) {
       query = query.in('donation_formId', raffleIds);
     }
 

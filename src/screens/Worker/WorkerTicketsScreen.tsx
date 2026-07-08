@@ -15,7 +15,7 @@ import { formatCurrency, shortId, formatDate } from '../../utils';
 import LoadingScreen from '../../components/LoadingScreen';
 
 export default function WorkerTicketsScreen() {
-  const { tickets, isLoading, fetchPaidTickets } = useTicketStore();
+  const { tickets, isLoading, isRefreshing, fetchPaidTickets } = useTicketStore();
   const { raffleId } = useAuthStore();
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
@@ -116,7 +116,7 @@ export default function WorkerTicketsScreen() {
     </Card>
   );
 
-  if (isLoading && tickets.length === 0) {
+  if (isLoading && !isRefreshing && tickets.length === 0) {
     return <LoadingScreen message="Loading tickets..." />;
   }
 

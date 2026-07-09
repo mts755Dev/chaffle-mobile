@@ -30,7 +30,8 @@ import { COLORS, STRIPE_PUBLISHABLE_KEY, US_STATES } from '../../constants';
 import { RootStackParamList } from '../../types';
 import { ticketApi } from '../../services/api/raffleApi';
 import { stripeApi } from '../../services/api/stripeApi';
-import { formatCurrency, getPublicIp } from '../../utils';
+import { computeChargeBreakdown, formatChargeCents } from '../../utils/paymentFees';
+import { getPublicIp } from '../../utils';
 import { useAuthStore } from '../../store/authStore';
 import { blockWorkerFromForeignRaffle } from '../../utils/workerAccess';
 import TicketTierSelector from '../../components/TicketTierSelector';
@@ -255,6 +256,16 @@ function BuyTicketsContent() {
   };
 
   if (workerBlocked) return null;
+
+  const customerChargeBreakdown = selectedPrice
+    ? computeChargeBreakdown(selectedPrice, {
+        includePlatformFee: donateExtra,
+        channel: 'online',
+      })
+    : null;
+  const customerChargeFormatted = customerChargeBreakdown
+    ? formatChargeCents(customerChargeBreakdown.totalCents)
+    : null;
 
   return (
     <KeyboardAvoidingView
@@ -532,7 +543,13 @@ function BuyTicketsContent() {
           contentStyle={styles.submitButtonContent}
           icon="credit-card"
         >
-          {isProcessing ? 'Processing...' : 'Proceed to Payment'}
+          {isProcessing
+            ? customerChargeFormatted
+              ? `Processing ${customerChargeFormatted}...`
+              : 'Processing...'
+            : customerChargeFormatted
+              ? `Proceed to Payment · ${customerChargeFormatted}`
+              : 'Proceed to Payment'}
         </Button>
       </ScrollView>
 

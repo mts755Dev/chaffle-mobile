@@ -42,7 +42,7 @@ import ReaderConnectionStatus from '../../../components/ReaderConnectionStatus';
 import PaymentStatusOverlay from '../../../components/PaymentStatus';
 import TapToPayCheckoutButton from '../../../components/TapToPayCheckoutButton';
 import PaymentChargeSummary from '../../../components/PaymentChargeSummary';
-import { chargeTotalDollars } from '../../../utils/paymentFees';
+import { computeChargeBreakdown, formatChargeCents } from '../../../utils/paymentFees';
 import TapToPayIcon from '../../../components/TapToPayIcon';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -356,12 +356,12 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
   const showCheckoutFooter =
     paymentStatus === 'idle' && currentStep === 'details' && !!selectedTier;
   const paymentActive = paymentStatus !== 'idle';
-  const customerChargeTotal = selectedTier
-    ? chargeTotalDollars(selectedTier.price, {
+  const customerChargeBreakdown = selectedTier
+    ? computeChargeBreakdown(selectedTier.price, {
         includePlatformFee: platformFee,
         channel: 'terminal',
       })
-    : 0;
+    : null;
 
   return (
     <KeyboardAvoidingView
@@ -427,7 +427,7 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
             outcome={paymentOutcome}
             error={paymentError}
             result={paymentResult}
-            amountInDollars={selectedTier?.price || 0}
+            customerChargeCents={customerChargeBreakdown?.totalCents ?? 0}
             ticketQuantity={selectedTier?.quantity || 0}
             buyerName={buyerName}
             buyerEmail={buyerEmail}
@@ -560,7 +560,9 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
                   >
                     {selectedTier.quantity} ticket
                     {selectedTier.quantity > 1 ? 's' : ''} –{' '}
-                    {formatCurrency(selectedTier.price)}
+                    {customerChargeBreakdown
+                      ? formatChargeCents(customerChargeBreakdown.totalCents)
+                      : formatCurrency(selectedTier.price)}
                   </Chip>
                 )}
               </View>
@@ -660,7 +662,11 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
 
       {showCheckoutFooter && (
         <TapToPayCheckoutButton
-          amountFormatted={formatCurrency(customerChargeTotal)}
+          amountFormatted={
+            customerChargeBreakdown
+              ? formatChargeCents(customerChargeBreakdown.totalCents)
+              : '$0.00'
+          }
           onPress={handleCollectPayment}
           loading={checkoutBusy}
         />

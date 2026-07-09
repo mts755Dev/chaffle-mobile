@@ -12,7 +12,9 @@ import {
   TAP_TO_PAY_PROCESSING_SUBTITLE,
   TAP_TO_PAY_PROCESSING_TITLE,
 } from '../constants/tapToPayCheckout';
-import { formatCurrency } from '../utils';
+import {
+  formatChargeCents,
+} from '../utils/paymentFees';
 import {
   buildPaymentReceiptText,
   outcomeTitle,
@@ -29,7 +31,7 @@ interface PaymentStatusProps {
   outcome: TerminalPaymentOutcome | null;
   error: string | null;
   result: TerminalPaymentResult | null;
-  amountInDollars: number;
+  customerChargeCents: number;
   ticketQuantity: number;
   buyerName: string;
   buyerEmail: string;
@@ -74,7 +76,7 @@ export default function PaymentStatusOverlay({
   outcome,
   error,
   result,
-  amountInDollars,
+  customerChargeCents,
   ticketQuantity,
   buyerName,
   buyerEmail,
@@ -91,13 +93,18 @@ export default function PaymentStatusOverlay({
   const resolvedOutcome: TerminalPaymentOutcome =
     outcome ?? (status === 'success' ? 'approved' : 'declined');
 
+  const customerChargeFormatted = formatChargeCents(customerChargeCents);
+
   const shareReceipt = async () => {
     try {
       await Share.share({
         title: 'Chaffle payment receipt',
         message: buildPaymentReceiptText({
           outcome: resolvedOutcome,
-          amountFormatted: formatCurrency(amountInDollars),
+          amountFormatted:
+            result?.amount != null
+              ? formatChargeCents(result.amount)
+              : customerChargeFormatted,
           ticketQuantity,
           buyerName,
           buyerEmail,
@@ -142,7 +149,7 @@ export default function PaymentStatusOverlay({
             <ActivityIndicator size={64} color={COLORS.primary} />
             <Text style={styles.title}>Preparing payment…</Text>
             <Text style={styles.subtitle}>
-              {formatCurrency(amountInDollars)} — {ticketQuantity} ticket
+              {customerChargeFormatted} — {ticketQuantity} ticket
               {ticketQuantity > 1 ? 's' : ''}
             </Text>
           </>
@@ -156,7 +163,7 @@ export default function PaymentStatusOverlay({
               Ask the customer to hold their card or device near the top of your iPhone.
             </Text>
             <Text style={styles.amount}>
-              {formatCurrency(amountInDollars)} — {ticketQuantity} ticket
+              {customerChargeFormatted} — {ticketQuantity} ticket
               {ticketQuantity > 1 ? 's' : ''}
             </Text>
             <Button mode="outlined" onPress={onCancel} style={styles.actionBtn} textColor={COLORS.error}>
@@ -170,6 +177,10 @@ export default function PaymentStatusOverlay({
             <ActivityIndicator size={64} color={COLORS.warning} />
             <Text style={styles.title}>{TAP_TO_PAY_PROCESSING_TITLE}</Text>
             <Text style={styles.subtitle}>{TAP_TO_PAY_PROCESSING_SUBTITLE}</Text>
+            <Text style={styles.amount}>
+              {customerChargeFormatted} — {ticketQuantity} ticket
+              {ticketQuantity > 1 ? 's' : ''}
+            </Text>
           </>
         )}
 
@@ -181,7 +192,7 @@ export default function PaymentStatusOverlay({
             </Text>
             {result && (
               <Text style={styles.subtitle}>
-                {formatCurrency(result.amount / 100)} charged successfully
+                {formatChargeCents(result.amount)} charged successfully
               </Text>
             )}
             {showReceipt && (

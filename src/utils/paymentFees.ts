@@ -47,3 +47,13 @@ export function chargeTotalDollars(
 ): number {
   return computeChargeBreakdown(baseAmountDollars, options).totalCents / 100;
 }
+
+/** Charge totals must show exact cents (unlike whole-dollar ticket prices). */
+export function formatChargeCents(cents: number): string {
+  return new Intl.NumberFormat('en-US', {
+    style: 'currency',
+    currency: 'USD',
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(cents / 100);
+}

@@ -9,7 +9,6 @@ import {
 } from 'react-native';
 import {
   Text,
-  TextInput,
   Button,
   Card,
   Icon,
@@ -18,6 +17,7 @@ import {
   Chip,
   Checkbox,
 } from 'react-native-paper';
+import TextInput from '../../../components/AppTextInput';
 import { useRoute, RouteProp, useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useStripeTerminalAccountScope } from '../../../contexts/StripeTerminalAccountContext';

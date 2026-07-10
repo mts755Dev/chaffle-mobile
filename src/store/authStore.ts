@@ -166,11 +166,12 @@ async function fetchOrgState(orgId: string): Promise<{
     return { id: null, connected: false, name: null, approvalStatus: null };
   }
   const stripeJson = data.stripe_account_json as { charges_enabled?: boolean; id?: string } | null;
+  const stripeAccountId = data.stripe_account_id ?? stripeJson?.id ?? null;
   const connected =
     !!stripeJson?.charges_enabled ||
-    !!(data.stripe_account_id && stripeJson?.id);
+    !!stripeAccountId;
   return {
-    id: data.stripe_account_id ?? null,
+    id: stripeAccountId,
     connected,
     name: data.name ?? null,
     approvalStatus: (data.approval_status as OrgApprovalStatus) ?? 'pending',

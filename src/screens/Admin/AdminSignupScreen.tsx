@@ -6,7 +6,8 @@ import {
   Platform,
   ScrollView,
 } from 'react-native';
-import { Text, TextInput, Button, Snackbar, Icon } from 'react-native-paper';
+import { Text, Button, Snackbar, Icon } from 'react-native-paper';
+import TextInput from '../../components/AppTextInput';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useForm, Controller } from 'react-hook-form';

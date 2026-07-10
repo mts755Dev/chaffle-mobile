@@ -13,12 +13,12 @@ import {
 } from 'react-native';
 import {
   Text,
-  TextInput,
   Button,
   Snackbar,
   Icon,
   Surface,
 } from 'react-native-paper';
+import TextInput from '../../components/AppTextInput';
 
 // Chaffle logo — same asset used in web navbar & footer
 const chaffleLogo = require('../../../assets/chaffle-logo.png');

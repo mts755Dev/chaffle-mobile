@@ -11,7 +11,6 @@ import {
 } from 'react-native';
 import {
   Text,
-  TextInput,
   Button,
   Card,
   Divider,
@@ -19,6 +18,7 @@ import {
   Icon,
   Menu,
 } from 'react-native-paper';
+import TextInput from '../../../components/AppTextInput';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { COLORS, API_BASE_URL } from '../../../constants';

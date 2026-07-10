@@ -10,7 +10,6 @@ import {
 } from 'react-native';
 import {
   Text,
-  TextInput,
   Button,
   Card,
   Chip,
@@ -19,6 +18,7 @@ import {
   IconButton,
   Menu,
 } from 'react-native-paper';
+import TextInput from '../../../components/AppTextInput';
 import { useRoute, RouteProp, useFocusEffect } from '@react-navigation/native';
 import { COLORS, PASSWORD_REGEX } from '../../../constants';
 import { RootStackParamList, Worker, OrgApprovalStatus } from '../../../types';

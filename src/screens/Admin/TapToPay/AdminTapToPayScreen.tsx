@@ -4,7 +4,7 @@
  */
 
 import React, { useCallback, useEffect, useState } from 'react';
-import { View, StyleSheet, ScrollView, Platform, Alert } from 'react-native';
+import { View, StyleSheet, ScrollView, Platform, Alert, ActivityIndicator } from 'react-native';
 import { Text, Card, Button } from 'react-native-paper';
 import { useNavigation, useRoute, useFocusEffect, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -39,6 +39,7 @@ export default function AdminTapToPayScreen() {
     organizationName,
     orgStripeAccountId,
     orgStripeConnected,
+    refreshOrgState,
   } = useAuthStore();
 
   const allowed = canSetupTapToPayOnDevice(isAdmin, role);
@@ -64,9 +65,27 @@ export default function AdminTapToPayScreen() {
   const terminalStripeAccount =
     routeStripeAccountId ??
     (isOrgScoped ? orgStripeAccountId ?? undefined : undefined);
+  const isSuperAdmin = role === 'super_admin';
+  const isStandaloneWorker = role === 'worker' && !isOrgScoped;
+  const usesPlatformTapToPaySetup =
+    !terminalStripeAccount && (isSuperAdmin || isStandaloneWorker);
   const merchantDisplayName = routeMerchantName?.trim()
     || (isOrgScoped ? organizationName?.trim() : undefined)
-    || 'Organization';
+    || (usesPlatformTapToPaySetup ? 'Chaffle' : 'Organization');
+  const canRenderSetup =
+    usesPlatformTapToPaySetup ||
+    (paymentReady && !!terminalStripeAccount);
+
+  useEffect(() => {
+    if (!allowed || !isOrgScoped || routeStripeAccountId || orgStripeAccountId) return;
+    void refreshOrgState();
+  }, [
+    allowed,
+    isOrgScoped,
+    routeStripeAccountId,
+    orgStripeAccountId,
+    refreshOrgState,
+  ]);
 
   useEffect(() => {
     if (!allowed) {
@@ -76,10 +95,11 @@ export default function AdminTapToPayScreen() {
 
   useEffect(() => {
     if (!allowed) return;
+    if (usesPlatformTapToPaySetup) return;
     if (!paymentReady) {
       if (isOrgScoped) {
         showOrgStripeRequiredAlert(() => navigation.goBack(), role);
-      } else {
+      } else if (!isSuperAdmin && !isStandaloneWorker) {
         showRaffleStripeRequiredAlert(() => navigation.goBack());
       }
     }
@@ -89,6 +109,9 @@ export default function AdminTapToPayScreen() {
     isOrgScoped,
     role,
     navigation,
+    usesPlatformTapToPaySetup,
+    isSuperAdmin,
+    isStandaloneWorker,
   ]);
 
   if (!allowed) {
@@ -105,8 +128,19 @@ export default function AdminTapToPayScreen() {
     );
   }
 
-  if (!paymentReady || !terminalStripeAccount) {
-    return null;
+  if (!canRenderSetup) {
+    return (
+      <View style={styles.centered}>
+        {paymentReady ? (
+          <ActivityIndicator size="large" color={COLORS.primary} style={styles.loader} />
+        ) : null}
+        <Text style={styles.unavailable}>
+          {!paymentReady
+            ? 'Stripe must be connected before Tap to Pay can be set up.'
+            : 'Loading your organization Stripe account for Tap to Pay…'}
+        </Text>
+      </View>
+    );
   }
 
   return (
@@ -116,6 +150,7 @@ export default function AdminTapToPayScreen() {
       terminalStripeAccount={terminalStripeAccount}
       merchantDisplayName={merchantDisplayName}
       isOrgScoped={isOrgScoped}
+      usesPlatformTapToPaySetup={usesPlatformTapToPaySetup}
     />
   );
 }
@@ -126,12 +161,14 @@ function AdminTapToPayContent({
   terminalStripeAccount,
   merchantDisplayName,
   isOrgScoped,
+  usesPlatformTapToPaySetup,
 }: {
   route: AdminTapToPayRoute;
   navigation: NavigationProp;
   terminalStripeAccount?: string;
   merchantDisplayName?: string;
   isOrgScoped: boolean;
+  usesPlatformTapToPaySetup: boolean;
 }) {
   const { isAdmin, role } = useAuthStore();
   const [educationStatus, setEducationStatus] = useState<string | null>(null);
@@ -212,9 +249,11 @@ function AdminTapToPayContent({
     <ScrollView style={styles.flex} contentContainerStyle={styles.content}>
       <Text style={styles.heading}>Tap to Pay on iPhone</Text>
       <Text style={styles.subheading}>
-        {isOrgScoped
-          ? 'Set up Tap to Pay once on this iPhone for your organization. After setup, in-person payments work for every raffle under your organization\'s Stripe account.'
-          : 'Set up and manage contactless payments for in-person ticket sales. This is separate from your checkout flow — use Tap to Pay on iPhone on a raffle when you\'re ready to charge a customer.'}
+        {usesPlatformTapToPaySetup
+          ? 'Set up Tap to Pay on this iPhone for device onboarding and Apple Terms acceptance. When you take in-person payments, the raffle\'s connected Stripe account is used at checkout.'
+          : isOrgScoped
+            ? 'Set up Tap to Pay once on this iPhone for your organization. After setup, in-person payments work for every raffle under your organization\'s Stripe account.'
+            : 'Set up and manage contactless payments for in-person ticket sales. This is separate from your checkout flow — use Tap to Pay on iPhone on a raffle when you\'re ready to charge a customer.'}
       </Text>
 
       {STRIPE_TERMINAL_SIMULATED && (
@@ -289,6 +328,7 @@ const styles = StyleSheet.create({
   flex: { flex: 1, backgroundColor: COLORS.background },
   content: { padding: 16, paddingBottom: 32 },
   centered: { flex: 1, justifyContent: 'center', padding: 24 },
+  loader: { marginBottom: 16 },
   unavailable: { fontSize: 15, color: COLORS.textSecondary, textAlign: 'center' },
   heading: { fontSize: 22, fontWeight: 'bold', color: COLORS.foreground, marginBottom: 8 },
   subheading: { fontSize: 14, color: COLORS.textSecondary, lineHeight: 20, marginBottom: 16 },

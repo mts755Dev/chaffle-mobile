@@ -7,7 +7,8 @@ import {
   Platform,
   Linking,
 } from 'react-native';
-import { Text, TextInput, Button, Snackbar, Card, Icon } from 'react-native-paper';
+import { Text, Button, Snackbar, Card, Icon } from 'react-native-paper';
+import TextInput from '../../components/AppTextInput';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { z } from 'zod';

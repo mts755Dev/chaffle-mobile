@@ -10,7 +10,6 @@ import {
 } from 'react-native';
 import {
   Text,
-  TextInput,
   Button,
   Card,
   Chip,
@@ -19,6 +18,7 @@ import {
   IconButton,
   Icon,
 } from 'react-native-paper';
+import TextInput from '../../../components/AppTextInput';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import * as Linking from 'expo-linking';
@@ -141,7 +141,15 @@ export default function AdminDashboardScreen() {
   );
 
   const openTapToPaySettings = () => {
-    navigation.navigate('AdminTapToPay', {});
+    if (isSuperAdmin) {
+      navigation.navigate('AdminTapToPay', {});
+      return;
+    }
+    navigation.navigate('AdminTapToPay', {
+      stripeAccountId: orgStripeAccountId ?? undefined,
+      merchantDisplayName: organizationName ?? undefined,
+      raffleOrganizationId: organizationId,
+    });
   };
 
   const onRefresh = async () => {

@@ -22,26 +22,64 @@ import {
 } from '../services/tapToPayPrefs';
 import {
   canSetupTapToPayOnDevice,
-  isOrgTapToPayReady,
 } from '../utils/tapToPayAccess';
+import { getTapToPayTermsAcceptedFromApple } from '../services/tapToPayTermsState';
+import { raffleApi } from '../services/api/raffleApi';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
 export default function TapToPayOnboardingHost() {
   const navigation = useNavigation<NavigationProp>();
-  const { isAdmin, role, organizationId, orgStripeConnected, orgStripeAccountId } =
+  const { isAdmin, role, organizationId, organizationName, orgStripeAccountId, raffleId, isLoading, refreshOrgState } =
     useAuthStore();
   const [showIntro, setShowIntro] = useState(false);
   const [showEnable, setShowEnable] = useState(false);
 
   const eligible =
     Platform.OS === 'ios'
-    && canSetupTapToPayOnDevice(isAdmin, role)
-    && isOrgTapToPayReady(role, orgStripeConnected, orgStripeAccountId, organizationId);
+    && !isLoading
+    && canSetupTapToPayOnDevice(isAdmin, role);
 
-  const openTapToPaySettings = useCallback(() => {
-    navigation.navigate('AdminTapToPay', { startSetup: true });
-  }, [navigation]);
+  useEffect(() => {
+    if (isLoading) return;
+    if ((role === 'org_admin' || role === 'worker') && organizationId && !orgStripeAccountId) {
+      void refreshOrgState();
+    }
+  }, [isLoading, role, organizationId, orgStripeAccountId, refreshOrgState]);
+
+  const openTapToPaySettings = useCallback(async () => {
+    if (role === 'super_admin') {
+      navigation.navigate('AdminTapToPay', { startSetup: true });
+      return;
+    }
+
+    let stripeAccountId = orgStripeAccountId ?? undefined;
+    let merchantDisplayName = organizationName ?? undefined;
+    let raffleOrganizationId: string | null | undefined = organizationId;
+
+    if (role === 'worker' && raffleId) {
+      const form = await raffleApi.getDonationFormById(raffleId);
+      if (form?.stripeAccount?.id) {
+        stripeAccountId = form.stripeAccount.id;
+        merchantDisplayName = form.title?.trim() || merchantDisplayName;
+      }
+      raffleOrganizationId = form?.organization_id ?? organizationId;
+    }
+
+    navigation.navigate('AdminTapToPay', {
+      stripeAccountId,
+      merchantDisplayName,
+      raffleOrganizationId,
+      startSetup: true,
+    });
+  }, [
+    navigation,
+    role,
+    orgStripeAccountId,
+    organizationName,
+    organizationId,
+    raffleId,
+  ]);
 
   const refreshOnboardingState = useCallback(async () => {
     if (!eligible) {
@@ -51,7 +89,8 @@ export default function TapToPayOnboardingHost() {
     }
 
     const setupComplete = await hasCompletedTapToPaySetup();
-    if (setupComplete) {
+    const termsAccepted = getTapToPayTermsAcceptedFromApple();
+    if (setupComplete && termsAccepted === true) {
       setShowIntro(false);
       setShowEnable(false);
       return;
@@ -95,7 +134,7 @@ export default function TapToPayOnboardingHost() {
   const handleIntroGetStarted = () => {
     setShowIntro(false);
     void markTapToPayIntroSeen();
-    openTapToPaySettings();
+    void openTapToPaySettings();
   };
 
   const handleIntroDismiss = () => {
@@ -110,7 +149,7 @@ export default function TapToPayOnboardingHost() {
   const handleEnableSetUp = () => {
     void markTapToPayEnablePromptSeen();
     setShowEnable(false);
-    openTapToPaySettings();
+    void openTapToPaySettings();
   };
 
   const handleEnableLater = () => {

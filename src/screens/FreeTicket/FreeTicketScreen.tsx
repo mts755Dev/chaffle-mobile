@@ -6,7 +6,8 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
-import { Text, TextInput, Button, Snackbar } from 'react-native-paper';
+import { Text, Button, Snackbar } from 'react-native-paper';
+import TextInput from '../../components/AppTextInput';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { useForm, Controller } from 'react-hook-form';

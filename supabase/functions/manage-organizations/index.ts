@@ -27,27 +27,11 @@ function getAdminClient() {
   );
 }
 
-async function raffleHasWinner(
-  adminClient: ReturnType<typeof getAdminClient>,
-  raffleId: string,
-): Promise<boolean> {
-  const { count, error } = await adminClient
-    .from("ticket")
-    .select("id", { count: "exact", head: true })
-    .eq("donation_formId", raffleId)
-    .eq("isWinner", true);
-
-  if (error) {
-    throw error;
-  }
-
-  return (count ?? 0) > 0;
-}
-
-async function deleteLiveRaffleData(
+async function deleteRaffleData(
   adminClient: ReturnType<typeof getAdminClient>,
   raffleId: string,
 ): Promise<void> {
+  await adminClient.from("draw_audit").delete().eq("raffleId", raffleId);
   await adminClient.from("secure_link").delete().eq("raffleId", raffleId);
   await adminClient.from("ticket").delete().eq("donation_formId", raffleId);
 
@@ -266,67 +250,54 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ error: rafflesError.message }, 500);
       }
 
-      let deletedActiveRaffles = 0;
-      let preservedCompletedRaffles = 0;
+      let deletedRaffles = 0;
 
       for (const raffle of orgRaffles ?? []) {
-        let hasWinner = false;
         try {
-          hasWinner = await raffleHasWinner(adminClient, raffle.id);
-        } catch (winnerError: unknown) {
-          const message =
-            winnerError instanceof Error
-              ? winnerError.message
-              : "Failed to inspect raffle completion status";
-          return jsonResponse({ error: message }, 500);
-        }
-
-        if (hasWinner) {
-          preservedCompletedRaffles += 1;
-          continue;
-        }
-
-        try {
-          await deleteLiveRaffleData(adminClient, raffle.id);
-          deletedActiveRaffles += 1;
+          await deleteRaffleData(adminClient, raffle.id);
+          deletedRaffles += 1;
         } catch (deleteError: unknown) {
           const message =
             deleteError instanceof Error
               ? deleteError.message
-              : "Failed to delete active raffle data";
+              : "Failed to delete raffle data";
           return jsonResponse({ error: message }, 500);
         }
       }
 
-      if (org.owner_id) {
-        await adminClient.auth.admin.updateUserById(org.owner_id, {
-          user_metadata: {
-            organization_id: null,
-            organization_name: null,
-          },
-        });
+      const ownerId = org.owner_id as string | null;
+
+      // Remove organization row before deleting the auth user so email can be
+      // reused on signup (auth delete must not be a ban).
+      const { error: deleteOrgError } = await adminClient
+        .from("organization")
+        .delete()
+        .eq("id", organizationId);
+
+      if (deleteOrgError) {
+        return jsonResponse({ error: deleteOrgError.message }, 500);
       }
 
-      const { data: terminatedOrg, error: terminateError } = await adminClient
-        .from("organization")
-        .update({
-          approval_status: "terminated",
-          terminated_at: new Date().toISOString(),
-          terminated_by: user.id,
-        })
-        .eq("id", organizationId)
-        .select("*")
-        .single();
-
-      if (terminateError) {
-        return jsonResponse({ error: terminateError.message }, 500);
+      if (ownerId) {
+        const { error: deleteOwnerError } = await adminClient.auth.admin.deleteUser(
+          ownerId,
+        );
+        if (deleteOwnerError) {
+          return jsonResponse(
+            {
+              error:
+                deleteOwnerError.message ||
+                "Failed to delete organization admin login",
+            },
+            400,
+          );
+        }
       }
 
       return jsonResponse({
         success: true,
-        organization: terminatedOrg,
-        deletedActiveRaffles,
-        preservedCompletedRaffles,
+        deletedRaffles,
+        deletedWorkers: (workers ?? []).length,
       });
     }
 

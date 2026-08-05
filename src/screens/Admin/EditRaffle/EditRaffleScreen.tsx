@@ -6,7 +6,6 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
-  Image,
   TouchableOpacity,
 } from 'react-native';
 import {
@@ -31,6 +30,8 @@ import { useImageUpload } from '../../../hooks/useImageUpload';
 import { resolveImageUrl, isValidAppDate, parseAppDate } from '../../../utils';
 import LoadingScreen from '../../../components/LoadingScreen';
 import RaffleOrganizationAssignCard from '../../../components/RaffleOrganizationAssignCard';
+import { RaffleCoverImage } from '../../../components/RaffleHeroBackground';
+import DownloadTicketsCsvButton from '../../../components/DownloadTicketsCsvButton';
 import * as Clipboard from 'expo-clipboard';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -304,19 +305,14 @@ export default function EditRaffleScreen() {
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
       >
-        {/* Header — matches web: "Raffle Information" + Preview link */}
+        {/* Header — title, then Download Tickets CSV below (no Preview on edit) */}
         <View style={styles.header}>
           <Text style={styles.pageTitle}>Raffle Information</Text>
           {!isCreateMode && raffleId ? (
-            <Button
-              mode="text"
-              icon="eye"
-              textColor={COLORS.primary}
-              compact
-              onPress={() => navigation.navigate('PreviewRaffle', { id: raffleId })}
-            >
-              Preview
-            </Button>
+            <DownloadTicketsCsvButton
+              raffleId={raffleId}
+              raffleTitle={form.title}
+            />
           ) : null}
         </View>
 
@@ -543,10 +539,9 @@ export default function EditRaffleScreen() {
           <Card.Content>
             <Text style={styles.cardTitle}>Background Image</Text>
             {resolveImageUrl(form.backgroundImage) ? (
-              <Image
-                source={{ uri: resolveImageUrl(form.backgroundImage)! }}
+              <RaffleCoverImage
+                imagePath={form.backgroundImage}
                 style={styles.previewImage}
-                resizeMode="cover"
               />
             ) : (
               <View style={styles.imagePlaceholder}>
@@ -605,10 +600,8 @@ const styles = StyleSheet.create({
     paddingBottom: 40,
   },
   header: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
     marginBottom: 16,
+    gap: 12,
   },
   pageTitle: {
     fontSize: 22,

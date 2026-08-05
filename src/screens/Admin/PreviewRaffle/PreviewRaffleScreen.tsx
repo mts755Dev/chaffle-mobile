@@ -6,7 +6,6 @@ import {
   Share,
   Image,
   Alert,
-  Dimensions,
 } from 'react-native';
 import {
   Text,
@@ -39,17 +38,15 @@ import {
   formatDate,
   parseAppDate,
   stripHtml,
-  resolveImageUrl,
   getTicketReferenceId,
 } from '../../../utils';
 import CountdownTimer from '../../../components/CountdownTimer';
 import HtmlContent from '../../../components/HtmlContent';
 import LoadingScreen from '../../../components/LoadingScreen';
 import ErrorScreen from '../../../components/ErrorScreen';
+import RaffleHeroBackground from '../../../components/RaffleHeroBackground';
 
 const chaffleLogo = require('../../../../assets/chaffle-logo.png');
-
-const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 type PreviewRaffleRouteProp = RouteProp<RootStackParamList, 'PreviewRaffle'>;
@@ -204,26 +201,7 @@ export default function PreviewRaffleScreen() {
         showsVerticalScrollIndicator={false}
       >
         {/* ─── Hero ─────────────────────────────────────────────── */}
-        <View style={styles.hero}>
-          {resolveImageUrl(donationForm.backgroundImage) ? (
-            <Image
-              source={{ uri: resolveImageUrl(donationForm.backgroundImage) }}
-              style={styles.heroImage}
-              resizeMode="cover"
-            />
-          ) : (
-            <View style={styles.heroPlaceholder} />
-          )}
-
-          {/* Logo pinned to the top-center */}
-          <View style={styles.heroLogoTop}>
-            <Image
-              source={chaffleLogo}
-              style={styles.heroLogoSmall}
-              resizeMode="contain"
-            />
-          </View>
-
+        <RaffleHeroBackground imagePath={donationForm.backgroundImage}>
           {/* Gradient overlay */}
           <View style={styles.heroOverlay}>
             {/* Top row — badge + status */}
@@ -268,7 +246,7 @@ export default function PreviewRaffleScreen() {
               ) : null}
             </View>
           </View>
-        </View>
+        </RaffleHeroBackground>
 
         {/* ─── Quick Stats Row ──────────────────────────────────── */}
         <View style={styles.statsStrip}>
@@ -590,42 +568,12 @@ export default function PreviewRaffleScreen() {
 /* ================================================================== */
 /*  Styles                                                            */
 /* ================================================================== */
-const TILE_SIZE = (SCREEN_WIDTH - 48) / 2; // 16 padding + 16 gap + 16 padding
-
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: COLORS.background },
   scroll: { flex: 1 },
   scrollContent: { paddingBottom: 40 },
 
-  /* ─── Hero ───────────────────────────── */
-  hero: {
-    height: 280,
-    backgroundColor: COLORS.primary,
-    position: 'relative',
-  },
-  heroImage: {
-    width: '100%',
-    height: '100%',
-  },
-  heroPlaceholder: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: COLORS.primary,
-  },
-  heroLogoTop: {
-    position: 'absolute',
-    top: 12,
-    left: 0,
-    right: 0,
-    alignItems: 'center',
-    zIndex: 5,
-  },
-  heroLogoSmall: {
-    width: 180,
-    height: 75,
-    opacity: 0.95,
-  },
+  /* ─── Hero overlays (image fill lives in RaffleHeroBackground) ─ */
   heroOverlay: {
     position: 'absolute',
     bottom: 0,
@@ -747,7 +695,7 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   infoTile: {
-    width: TILE_SIZE,
+    width: '47%',
     aspectRatio: 1,
     borderRadius: 16,
     backgroundColor: COLORS.primary,

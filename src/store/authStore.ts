@@ -358,7 +358,10 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       });
 
       if (error) {
-        set({ error: error.message, isLoading: false });
+        const message = /banned/i.test(error.message)
+          ? 'This account is no longer available. If your organization was removed, you can sign up again with the same email.'
+          : error.message;
+        set({ error: message, isLoading: false });
         return;
       }
 
@@ -413,6 +416,15 @@ export const useAuthStore = create<AuthState>((set, get) => ({
       };
       if (loginOrgId && (shouldLoadOrgStripe(user) || deriveRole(user) === 'org_admin')) {
         loginOrgState = await fetchOrgState(loginOrgId);
+      }
+
+      if (loginOrgState.approvalStatus === 'terminated') {
+        await supabase.auth.signOut();
+        set({
+          error: 'Your organization has been terminated. You can no longer sign in.',
+          isLoading: false,
+        });
+        return;
       }
 
       await prefetchAdminHomeData(user);
@@ -483,23 +495,25 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         return;
       }
 
-      const refreshed = await refreshAuthUser(
-        signUpData.user,
-        signUpData.session,
-      );
-
-      const signupOrgState = await fetchOrgState(orgData.id);
-
-      await prefetchAdminHomeData(refreshed.user);
+      // Best practice: account is created, but user must sign in explicitly.
+      await supabase.auth.signOut();
+      useRaffleStore.getState().reset();
+      useTicketStore.getState().reset();
 
       set({
-        ...buildAuthPatch(refreshed.user, refreshed.session, signupOrgState, {
-          role: 'org_admin',
-          organizationId: orgData.id,
-          organizationName,
-          orgApprovalStatus: 'pending',
-        }),
+        user: null,
+        session: null,
+        isAdmin: false,
+        canManageTapToPay: false,
+        role: null,
+        organizationId: null,
+        organizationName: null,
+        raffleId: null,
+        orgStripeAccountId: null,
+        orgStripeConnected: false,
+        orgApprovalStatus: null,
         isLoading: false,
+        error: null,
       });
     } catch (err: any) {
       set({ error: err.message || 'Signup failed', isLoading: false });

@@ -139,7 +139,7 @@ export default function ManageOrganizationsScreen() {
   const handleTerminate = (org: OrganizationRecord) => {
     Alert.alert(
       'Terminate Organization',
-      `Terminate "${org.name}"? Active raffles and live data will be removed. Completed raffles will remain and show this organization as terminated.`,
+      `Remove "${org.name}" completely? This deletes all raffles, tickets, and workers, and frees the email so they can sign up again.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -150,7 +150,10 @@ export default function ManageOrganizationsScreen() {
             try {
               await organizationApi.terminateOrganization(org.id);
               await loadOrganizations();
-              Alert.alert('Terminated', `"${org.name}" has been terminated.`);
+              Alert.alert(
+                'Terminated',
+                `"${org.name}" and all related data were removed. That email can sign up again.`,
+              );
             } catch (err: any) {
               Alert.alert('Error', err.message || 'Failed to terminate organization');
             } finally {

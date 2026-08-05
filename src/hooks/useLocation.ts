@@ -26,10 +26,10 @@ export function useLocation() {
         const { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== 'granted') {
           setLocationState((prev) => ({
-            ...prev,
-            isLoading: false,
-            error: 'Location permission denied',
-            hasPermission: false,
+              ...prev,
+              isLoading: false,
+              error: 'Location permission denied',
+              hasPermission: false,
           }));
           return;
         }

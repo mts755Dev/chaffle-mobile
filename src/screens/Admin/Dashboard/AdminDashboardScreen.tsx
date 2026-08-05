@@ -42,6 +42,7 @@ import {
 } from '../../../utils/orgAccess';
 import { formatOrganizationLabel } from '../../../utils/orgDisplay';
 import { organizationApi } from '../../../services/api/organizationApi';
+import DownloadTicketsCsvButton from '../../../components/DownloadTicketsCsvButton';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -494,6 +495,11 @@ export default function AdminDashboardScreen() {
                         size={20}
                         onPress={() => navigation.navigate('PreviewRaffle', { id: form.id })}
                         style={styles.iconAction}
+                      />
+                      <DownloadTicketsCsvButton
+                        raffleId={form.id}
+                        raffleTitle={form.title}
+                        variant="icon"
                       />
                       <IconButton
                         icon="account-group"

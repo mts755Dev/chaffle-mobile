@@ -4,7 +4,6 @@ import {
   StyleSheet,
   ScrollView,
   Alert,
-  Image,
   Platform,
   TouchableOpacity,
 } from 'react-native';
@@ -22,6 +21,7 @@ import { RootStackParamList, DonationForm } from '../../types';
 import { useAuthStore } from '../../store/authStore';
 import { raffleApi } from '../../services/api/raffleApi';
 import { formatCurrency, formatDate, resolveImageUrl, parseAppDate } from '../../utils';
+import { RaffleCoverImage } from '../../components/RaffleHeroBackground';
 import LoadingScreen from '../../components/LoadingScreen';
 import CountdownTimer from '../../components/CountdownTimer';
 import TapToPayIcon from '../../components/TapToPayIcon';
@@ -391,10 +391,9 @@ export default function WorkerDashboardScreen() {
         <ShadowCard contentStyle={styles.raffleBody}>
             <View style={styles.raffleTopRow}>
               {resolveImageUrl(raffle.backgroundImage) ? (
-                <Image
-                  source={{ uri: resolveImageUrl(raffle.backgroundImage) }}
+                <RaffleCoverImage
+                  imagePath={raffle.backgroundImage}
                   style={styles.raffleThumb}
-                  resizeMode="cover"
                 />
               ) : (
                 <View style={styles.raffleThumbPlaceholder}>

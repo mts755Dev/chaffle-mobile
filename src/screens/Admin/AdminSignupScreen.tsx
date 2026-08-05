@@ -16,7 +16,6 @@ import { z } from 'zod';
 import { COLORS, PASSWORD_REGEX } from '../../constants';
 import { RootStackParamList } from '../../types';
 import { useAuthStore } from '../../store/authStore';
-import { resetToAdminHome } from '../../navigation/resetToAdminHome';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -51,9 +50,9 @@ export default function AdminSignupScreen() {
 
   const onSubmit = async (data: SignupFormData) => {
     await signup(data.email, data.password, data.organizationName);
-    const { isAdmin, error: authError } = useAuthStore.getState();
-    if (!authError && isAdmin) {
-      resetToAdminHome(navigation, 'org_admin');
+    const { error: authError } = useAuthStore.getState();
+    if (!authError) {
+      navigation.navigate('AdminLogin');
     }
   };
 

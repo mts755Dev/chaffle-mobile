@@ -17,7 +17,7 @@
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "com.chaffleorg.chaffle",
-      "buildNumber": "2",
+      "buildNumber": "3",
       "entitlements": {
         "com.apple.developer.proximity-reader.payment.acceptance": true
       },
@@ -69,6 +69,7 @@
       ]
     },
     "plugins": [
+      "@react-native-community/datetimepicker",
       [
         "expo-image-picker",
         {

@@ -27,6 +27,14 @@ export const TICKET_TIERS = [
   { price: 250, quantity: 500 },
 ] as const;
 
+/** Custom amounts (Tap to Pay / in-person): 3 tickets per $1, must be greater than $250. */
+export const CUSTOM_TICKET_DOLLARS_MIN = 250;
+export const CUSTOM_TICKETS_PER_DOLLAR = 3;
+
+export function customTicketQuantityFromDollars(dollars: number): number {
+  return Math.floor(dollars) * CUSTOM_TICKETS_PER_DOLLAR;
+}
+
 // Theme colors — matched to the web app's globals.css / Tailwind config
 export const COLORS = {
   // Primary: HSL(194, 43%, 48%) — the teal/cyan brand color

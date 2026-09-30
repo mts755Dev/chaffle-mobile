@@ -40,11 +40,36 @@ async function parseInvokeError(error: unknown, fallback: string): Promise<strin
   const context = (error as { context?: Response })?.context;
   if (context) {
     try {
-      const payload = await context.json();
+      const clone =
+        typeof context.clone === 'function' ? context.clone() : context;
+      const payload = await clone.json();
       message = payload?.error || payload?.message || message;
     } catch {
-      // Keep parsed message when response body cannot be read.
+      try {
+        const clone =
+          typeof context.clone === 'function' ? context.clone() : context;
+        const text = await clone.text();
+        if (text?.trim()) {
+          try {
+            const payload = JSON.parse(text);
+            message = payload?.error || payload?.message || text;
+          } catch {
+            message = text.slice(0, 300);
+          }
+        }
+      } catch {
+        // Keep parsed message when response body cannot be read.
+      }
     }
+  }
+
+  // Prefer concrete edge JSON error over the generic FunctionsHttpError text.
+  if (
+    /edge function returned a non-2xx/i.test(message) &&
+    fallback &&
+    fallback !== message
+  ) {
+    // keep message if we already replaced it from body; otherwise leave as-is
   }
 
   return message;

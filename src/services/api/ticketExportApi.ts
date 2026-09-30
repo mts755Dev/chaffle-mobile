@@ -3,7 +3,7 @@
  * Mobile allows super_admin and org_admin (org-scoped).
  */
 
-import { supabase } from '../supabase/client';
+import { supabase, supabasePublic } from '../supabase/client';
 import { getTicketReferenceId } from '../../utils';
 import type { AdminRole } from '../../types';
 
@@ -60,7 +60,7 @@ export async function getRaffleTicketsForExport(params: {
       return { success: false, error: 'Raffle id is required' };
     }
 
-    const { data: raffle, error: raffleError } = await supabase
+    const { data: raffle, error: raffleError } = await supabasePublic
       .from('donation_form')
       .select('id, title, organization_id')
       .eq('id', raffleId)
@@ -82,7 +82,23 @@ export async function getRaffleTicketsForExport(params: {
       }
     }
 
-    const { data: tickets, error: ticketsError } = await supabase
+    // Managers need unpaid + paid (can_manage_raffle). Fall back to paid-only public if needed.
+    let rows: Array<{
+      id: string;
+      buyerName: string;
+      buyerEmail: string;
+      phone: string | null;
+      address: string | null;
+      amount: number;
+      quantity: number;
+      isFree: boolean | null;
+      paid: boolean | null;
+      isWinner: boolean | null;
+      created_at: string;
+      updated_at: string;
+    }> = [];
+
+    const { data: managedTickets, error: ticketsError } = await supabase
       .from('ticket')
       .select(
         'id, buyerName, buyerEmail, phone, address, amount, quantity, isFree, paid, isWinner, created_at, updated_at',
@@ -93,8 +109,7 @@ export async function getRaffleTicketsForExport(params: {
     if (ticketsError) {
       return { success: false, error: ticketsError.message };
     }
-
-    const rows = tickets ?? [];
+    rows = managedTickets ?? [];
     const raffleTitle = raffle.title ?? 'Untitled raffle';
 
     return {

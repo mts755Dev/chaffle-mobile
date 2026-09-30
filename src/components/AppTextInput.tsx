@@ -21,18 +21,21 @@ const AppTextInput = React.forwardRef<any, AppTextInputProps>(
     ref,
   ) {
     const isMultiline = !!multiline;
+    const resolvedReturnKey =
+      returnKeyType ?? (isMultiline ? 'default' : 'done');
+    const isNext = resolvedReturnKey === 'next';
 
     return (
       <TextInput
         ref={ref}
         multiline={multiline}
-        blurOnSubmit={blurOnSubmit ?? !isMultiline}
-        returnKeyType={returnKeyType ?? (isMultiline ? 'default' : 'done')}
+        blurOnSubmit={blurOnSubmit ?? (!isMultiline && !isNext)}
+        returnKeyType={resolvedReturnKey}
         onSubmitEditing={(e) => {
-          if (!isMultiline) {
+          onSubmitEditing?.(e);
+          if (!isMultiline && !isNext) {
             Keyboard.dismiss();
           }
-          onSubmitEditing?.(e);
         }}
         {...rest}
       />

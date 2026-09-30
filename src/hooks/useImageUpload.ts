@@ -99,6 +99,7 @@ export function useImageUpload() {
   /**
    * Uploads to the same storage layout as web:
    *   /public/<raffleId>/background/<filename>
+   *   /public/<raffleId>/presented-by/<filename>
    * Prefers the upload-raffle-image edge function; falls back to direct storage.
    */
   const uploadImage = async (
@@ -106,6 +107,8 @@ export function useImageUpload() {
     options: {
       raffleId: string;
       isBackground?: boolean;
+      /** Overrides background/images folder — e.g. 'presented-by' (matches web). */
+      subfolder?: string;
       mimeType?: string | null;
     },
   ): Promise<string | null> => {
@@ -113,7 +116,7 @@ export function useImageUpload() {
     setError(null);
 
     try {
-      const { raffleId, isBackground = true, mimeType } = options;
+      const { raffleId, isBackground = true, subfolder, mimeType } = options;
       if (!raffleId) {
         throw new Error('Save the raffle first, then upload a background image.');
       }
@@ -121,9 +124,10 @@ export function useImageUpload() {
       const contentType = guessContentType(uri, mimeType);
       const fileExt = extensionFromContentType(contentType, uri);
       const fileName = `${Date.now()}.${fileExt}`;
-      const filePath = `public/${raffleId}/${
-        isBackground ? 'background' : 'images'
-      }/${fileName}`;
+      const folder =
+        subfolder?.replace(/[^a-zA-Z0-9._-]/g, '') ||
+        (isBackground ? 'background' : 'images');
+      const filePath = `public/${raffleId}/${folder}/${fileName}`;
 
       const base64 = await FileSystem.readAsStringAsync(uri, {
         encoding: FileSystem.EncodingType.Base64,
@@ -145,6 +149,7 @@ export function useImageUpload() {
           {
             raffleId,
             isBackground,
+            subfolder: folder,
             fileName,
             contentType,
             base64,

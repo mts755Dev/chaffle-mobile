@@ -70,6 +70,7 @@ Deno.serve(async (req) => {
     const body = await req.json();
     const raffleId = body?.raffleId as string | undefined;
     const isBackground = body?.isBackground !== false;
+    const subfolderRaw = body?.subfolder as string | undefined;
     const contentType = (body?.contentType as string | undefined) || "image/jpeg";
     const fileNameRaw = (body?.fileName as string | undefined) || `${Date.now()}.jpg`;
     const base64 = body?.base64 as string | undefined;
@@ -116,9 +117,10 @@ Deno.serve(async (req) => {
     }
 
     const safeName = fileNameRaw.replace(/[^a-zA-Z0-9._-]/g, "_");
-    const filePath = `public/${raffleId}/${
-      isBackground ? "background" : "images"
-    }/${safeName}`;
+    const folder =
+      (subfolderRaw || "").replace(/[^a-zA-Z0-9._-]/g, "") ||
+      (isBackground ? "background" : "images");
+    const filePath = `public/${raffleId}/${folder}/${safeName}`;
 
     const { error: uploadError } = await adminClient.storage
       .from(STORAGE_BUCKET)

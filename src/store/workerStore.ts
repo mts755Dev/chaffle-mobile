@@ -9,6 +9,7 @@ interface WorkerState {
 
   fetchWorkers: (raffleId: string) => Promise<void>;
   addWorker: (worker: Parameters<typeof workerApi.createWorker>[0]) => Promise<Worker>;
+  prependWorker: (worker: Worker) => void;
   removeWorker: (workerId: string) => Promise<void>;
   clearError: () => void;
 }
@@ -25,6 +26,7 @@ export const useWorkerStore = create<WorkerState>((set) => ({
       set({ workers, isLoading: false });
     } catch (err: any) {
       set({ error: err.message, isLoading: false });
+      throw err;
     }
   },
 
@@ -41,6 +43,15 @@ export const useWorkerStore = create<WorkerState>((set) => ({
       set({ error: err.message, isLoading: false });
       throw err;
     }
+  },
+
+  prependWorker: (worker) => {
+    set((state) => {
+      if (state.workers.some((w) => w.id === worker.id)) {
+        return state;
+      }
+      return { workers: [worker, ...state.workers] };
+    });
   },
 
   removeWorker: async (workerId: string) => {

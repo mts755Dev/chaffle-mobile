@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useLayoutEffect, useState } from 'react';
 import {
   View,
   StyleSheet,
@@ -14,7 +14,7 @@ import {
   Divider,
   Icon,
 } from 'react-native-paper';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { COLORS } from '../../constants';
 import { RootStackParamList, DonationForm } from '../../types';
@@ -224,7 +224,6 @@ export default function WorkerDashboardScreen() {
     tapToPayOrgId,
     raffleStripeAccount,
   );
-  const canSellInPerson = orgStripeReady && raffleHasStripe;
 
   const displayName = getWorkerDisplayName(
     user?.email,
@@ -237,6 +236,12 @@ export default function WorkerDashboardScreen() {
   const drawDate = parseAppDate(raffle?.draw_date);
   const isRaffleCompleted = !!drawDate && drawDate.isBefore(new Date());
 
+  useLayoutEffect(() => {
+    navigation.setOptions({
+      headerLeft: () => null,
+    });
+  }, [navigation]);
+
   const handleLogout = useCallback(() => {
     Alert.alert('Sign out', 'Are you sure you want to sign out?', [
       { text: 'Cancel', style: 'cancel' },
@@ -245,11 +250,10 @@ export default function WorkerDashboardScreen() {
         style: 'destructive',
         onPress: async () => {
           await logout();
-          navigation.navigate('MainTabs' as any);
         },
       },
     ]);
-  }, [logout, navigation]);
+  }, [logout]);
 
   const loadRaffle = useCallback(async () => {
     if (!raffleId) {
@@ -274,9 +278,11 @@ export default function WorkerDashboardScreen() {
     }
   }, [raffleId, refreshOrgState]);
 
-  useEffect(() => {
-    loadRaffle();
-  }, [loadRaffle]);
+  useFocusEffect(
+    useCallback(() => {
+      void loadRaffle();
+    }, [loadRaffle]),
+  );
 
   const openTapToPaySettings = () => {
     navigation.navigate('AdminTapToPay', {
@@ -334,10 +340,34 @@ export default function WorkerDashboardScreen() {
         onSignOut={handleLogout}
       />
 
-      {/* Tap to Pay — top priority */}
-      {showTapToPayFeatures ? (
+      {/* Payments — Charge customer + Manual entry */}
+      {raffle ? (
         <ShadowCard contentStyle={styles.cardPad}>
           <Text style={styles.cardLabel}>Payments</Text>
+          {showTapToPayFeatures ? (
+            <CompactMenuRow
+              icon="contactless-payment"
+              title="Charge customer"
+              subtitle="Accept an in-person card payment"
+              onPress={openInPersonPayment}
+              last={false}
+            />
+          ) : null}
+          <CompactMenuRow
+            icon="ticket-confirmation-outline"
+            title="Manual entry"
+            subtitle="Open checkout for this raffle"
+            onPress={() => navigation.navigate('PreviewRaffle', { id: raffle.id })}
+            last
+          />
+        </ShadowCard>
+      ) : null}
+
+      {/* Actions — Tap to Pay setup + Search */}
+      {raffle ? (
+        <ShadowCard contentStyle={styles.cardPad}>
+          <Text style={styles.cardLabel}>Actions</Text>
+          {showTapToPayFeatures ? (
             <CompactMenuRow
               iconComponent={
                 <TapToPayIcon size={18} color={COLORS.primary} filled />
@@ -351,37 +381,16 @@ export default function WorkerDashboardScreen() {
                     : 'Waiting for raffle Stripe'
               }
               onPress={openTapToPaySettings}
-              last={!canSellInPerson}
+              last={false}
             />
-            {canSellInPerson ? (
-              <CompactMenuRow
-                icon="contactless-payment"
-                title="Charge customer"
-                subtitle="Accept an in-person card payment"
-                onPress={openInPersonPayment}
-                last
-              />
-            ) : null}
-        </ShadowCard>
-      ) : null}
-
-      {/* Quick actions */}
-      {raffle ? (
-        <ShadowCard contentStyle={styles.cardPad}>
-          <Text style={styles.cardLabel}>Actions</Text>
-            <CompactMenuRow
-              icon="ticket-confirmation-outline"
-              title="Sell tickets"
-              subtitle="Open checkout for this raffle"
-              onPress={() => navigation.navigate('PreviewRaffle', { id: raffle.id })}
-            />
-            <CompactMenuRow
-              icon="magnify"
-              title="Search tickets"
-              subtitle="Look up a buyer or reference"
-              onPress={() => navigation.navigate('WorkerTickets')}
-              last
-            />
+          ) : null}
+          <CompactMenuRow
+            icon="magnify"
+            title="Search tickets"
+            subtitle="Look up a buyer or reference"
+            onPress={() => navigation.navigate('WorkerTickets' as never)}
+            last
+          />
         </ShadowCard>
       ) : null}
 

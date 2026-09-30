@@ -84,7 +84,8 @@ export const useRaffleStore = create<RaffleState>((set, get) => ({
       const totals = await raffleApi.getTicketsAmountByRaffle(raffleId, raffleIds);
       set({ ticketTotals: totals });
       return totals;
-    } catch {
+    } catch (err: any) {
+      console.warn('[raffleStore.fetchTicketTotals]', err?.message || err);
       return [];
     }
   },
@@ -117,13 +118,28 @@ export const useRaffleStore = create<RaffleState>((set, get) => ({
     }
   },
 
+  // Avoid full-dashboard loading spinner for small field toggles (e.g. location check).
   updateForm: async (payload) => {
-    set({ isLoading: true, error: null });
+    const quiet =
+      Object.keys(payload).length === 2 &&
+      'locationCheckEnabled' in payload;
+
+    if (!quiet) {
+      set({ isLoading: true, error: null });
+    } else {
+      set({ error: null });
+    }
+
     try {
       const updated = await raffleApi.updateForm(payload);
       set((state) => ({
-        forms: state.forms.map((f) => (f.id === payload.id ? updated : f)),
-        currentForm: state.currentForm?.id === payload.id ? updated : state.currentForm,
+        forms: state.forms.map((f) =>
+          f.id === payload.id ? { ...f, ...updated } : f,
+        ),
+        currentForm:
+          state.currentForm?.id === payload.id
+            ? { ...state.currentForm, ...updated }
+            : state.currentForm,
         isLoading: false,
       }));
     } catch (err: any) {

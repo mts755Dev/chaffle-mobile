@@ -69,9 +69,9 @@ export default function RaffleScreen() {
       const totals = await raffleApi.getTicketsAmountByRaffle(id);
       if (totals.length > 0) setTicketTotal(totals[0]);
 
-      // Auto-draw when draw_date has passed — mirrors web public raffle page
+      // Auto-draw only when Eastern draw time has passed
       try {
-        await drawApi.triggerAutoDrawIfDue(id);
+        await drawApi.triggerAutoDrawIfDue(id, form.draw_date);
       } catch {
         // Non-fatal: page still loads if auto-draw fails
       }
@@ -88,12 +88,12 @@ export default function RaffleScreen() {
 
     autoDrawTriggered.current = true;
     try {
-      await drawApi.triggerAutoDrawIfDue(id);
+      await drawApi.triggerAutoDrawIfDue(id, donationForm?.draw_date);
       await refreshWinner(id);
     } catch {
       autoDrawTriggered.current = false;
     }
-  }, [id, refreshWinner, winnerTicket]);
+  }, [id, refreshWinner, winnerTicket, donationForm?.draw_date]);
 
   const handleShare = async () => {
     try {

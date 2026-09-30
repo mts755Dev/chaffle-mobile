@@ -22,7 +22,7 @@ const ExpoSecureStoreAdapter = {
   },
 };
 
-function buildClient(): SupabaseClient {
+function buildAuthedClient(): SupabaseClient {
   const url = SUPABASE_URL?.trim();
   const key = SUPABASE_ANON_KEY?.trim();
 
@@ -48,5 +48,46 @@ function buildClient(): SupabaseClient {
   });
 }
 
-export const supabase = buildClient();
+/**
+ * Public catalogue / buyer checkout client (no user JWT).
+ *
+ * Uses in-memory auth storage so a signed-in admin session on `supabase`
+ * can never leak onto this client (SecureStore / AsyncStorage share risks).
+ */
+function buildPublicClient(): SupabaseClient {
+  const url = SUPABASE_URL?.trim();
+  const key = SUPABASE_ANON_KEY?.trim();
+  const memoryStorage = {
+    getItem: async (_k: string) => null as string | null,
+    setItem: async (_k: string, _v: string) => {},
+    removeItem: async (_k: string) => {},
+  };
+  if (!url || !key) {
+    return createClient('https://placeholder.supabase.co', 'placeholder', {
+      auth: {
+        storageKey: 'chaffle-public-anon',
+        storage: memoryStorage,
+        persistSession: false,
+        autoRefreshToken: false,
+        detectSessionInUrl: false,
+      },
+    });
+  }
+  return createClient(url, key, {
+    auth: {
+      // Unique key so this client never shares GoTrue in-memory session
+      // with the signed-in `supabase` client (same default storageKey = leak).
+      storageKey: 'chaffle-public-anon',
+      storage: memoryStorage,
+      persistSession: false,
+      autoRefreshToken: false,
+      detectSessionInUrl: false,
+    },
+  });
+}
+
+/** Authenticated client — JWT attached (writes, private rows, edge invokes). */
+export const supabase = buildAuthedClient();
+/** Public catalogue reads — never attach the user JWT. */
+export const supabasePublic = buildPublicClient();
 export default supabase;

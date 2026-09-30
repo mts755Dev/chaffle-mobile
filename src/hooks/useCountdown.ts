@@ -1,6 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import dayjs from 'dayjs';
-import { parseAppDate } from '../utils';
+import { parseRaffleDrawDate } from '../lib/raffleDates';
 
 interface CountdownState {
   days: number;
@@ -10,6 +9,7 @@ interface CountdownState {
   isExpired: boolean;
 }
 
+/** Countdown to raffle draw — target is always US Eastern wall clock. */
 export function useCountdown(targetDate: string | null): CountdownState {
   const [countdown, setCountdown] = useState<CountdownState>({
     days: 0,
@@ -22,8 +22,19 @@ export function useCountdown(targetDate: string | null): CountdownState {
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    const target = parseAppDate(targetDate);
-    if (!target) {
+    if (!targetDate?.trim()) {
+      setCountdown({
+        days: 0,
+        hours: 0,
+        minutes: 0,
+        seconds: 0,
+        isExpired: true,
+      });
+      return;
+    }
+
+    const targetMs = parseRaffleDrawDate(targetDate).getTime();
+    if (Number.isNaN(targetMs)) {
       setCountdown({
         days: 0,
         hours: 0,
@@ -35,10 +46,9 @@ export function useCountdown(targetDate: string | null): CountdownState {
     }
 
     const calculate = () => {
-      const now = dayjs();
-      const diff = target.diff(now, 'second');
+      const diffSec = Math.floor((targetMs - Date.now()) / 1000);
 
-      if (!Number.isFinite(diff) || diff <= 0) {
+      if (!Number.isFinite(diffSec) || diffSec <= 0) {
         setCountdown({
           days: 0,
           hours: 0,
@@ -50,10 +60,10 @@ export function useCountdown(targetDate: string | null): CountdownState {
         return;
       }
 
-      const days = Math.floor(diff / 86400);
-      const hours = Math.floor((diff % 86400) / 3600);
-      const minutes = Math.floor((diff % 3600) / 60);
-      const seconds = diff % 60;
+      const days = Math.floor(diffSec / 86400);
+      const hours = Math.floor((diffSec % 86400) / 3600);
+      const minutes = Math.floor((diffSec % 3600) / 60);
+      const seconds = diffSec % 60;
 
       setCountdown({ days, hours, minutes, seconds, isExpired: false });
     };

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View,
   StyleSheet,
@@ -10,7 +10,9 @@ import {
   Linking,
   Animated,
   Image,
+  Alert,
 } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   Text,
   Button,
@@ -28,6 +30,8 @@ import { COLORS, SOCIAL_LINKS } from '../../constants';
 import { RootStackParamList } from '../../types';
 import { raffleApi } from '../../services/api/raffleApi';
 import { formatCurrency } from '../../utils';
+import { useAuthStore } from '../../store/authStore';
+import { resetToSignIn } from '../../navigation/resetToSignIn';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 
@@ -35,6 +39,9 @@ const { width: SCREEN_WIDTH } = Dimensions.get('window');
 
 export default function HomeScreen() {
   const navigation = useNavigation<NavigationProp>();
+  const insets = useSafeAreaInsets();
+  const isAdmin = useAuthStore((s) => s.isAdmin);
+  const logout = useAuthStore((s) => s.logout);
   const [charityId, setCharityId] = useState('');
   const [isSearching, setIsSearching] = useState(false);
   const [error, setError] = useState('');
@@ -61,6 +68,20 @@ export default function HomeScreen() {
       }),
     ]).start();
   }, []);
+
+  const handleSignOut = useCallback(() => {
+    Alert.alert('Sign out', 'Are you sure you want to sign out?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Sign out',
+        style: 'destructive',
+        onPress: async () => {
+          await logout();
+          resetToSignIn(navigation);
+        },
+      },
+    ]);
+  }, [logout, navigation]);
 
   const loadStats = async () => {
     try {
@@ -119,7 +140,19 @@ export default function HomeScreen() {
         showsVerticalScrollIndicator={false}
       >
         {/* ── Hero ─────────────────────────────────────── */}
-        <View style={styles.hero}>
+        <View style={[styles.hero, { paddingTop: insets.top + 8 }]}>
+          {isAdmin ? (
+            <TouchableOpacity
+              onPress={handleSignOut}
+              style={styles.signOutBtn}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+              accessibilityRole="button"
+              accessibilityLabel="Sign out"
+            >
+              <Icon source="logout" size={18} color={COLORS.white} />
+              <Text style={styles.signOutText}>Sign out</Text>
+            </TouchableOpacity>
+          ) : null}
           <View style={styles.heroInner}>
             <Image
               source={chaffleLogo}
@@ -315,6 +348,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: 24,
     borderBottomLeftRadius: 32,
     borderBottomRightRadius: 32,
+  },
+  signOutBtn: {
+    alignSelf: 'flex-end',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: 4,
+    paddingHorizontal: 4,
+    marginBottom: 8,
+  },
+  signOutText: {
+    color: COLORS.white,
+    fontSize: 14,
+    fontWeight: '600',
   },
   heroInner: {
     alignItems: 'center',

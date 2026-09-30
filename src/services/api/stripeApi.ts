@@ -1,5 +1,5 @@
 import apiClient from './client';
-import { supabase } from '../supabase/client';
+import { supabase, supabasePublic } from '../supabase/client';
 import { API_BASE_URL, SUPABASE_ANON_KEY, SUPABASE_URL } from '../../constants';
 
 function assertSupabaseConfigured(): void {
@@ -34,34 +34,86 @@ export const stripeApi = {
       body: params,
     });
 
-    if (error) throw new Error(error.message || 'Failed to create payment intent');
-    if (data?.error) throw new Error(data.error);
+    // Prefer the edge function's JSON { error } over the generic FunctionsHttpError text.
+    const bodyError =
+      data && typeof data === 'object' && 'error' in data
+        ? String((data as { error?: unknown }).error || '')
+        : '';
+    if (error) {
+      throw new Error(bodyError || error.message || 'Failed to create payment intent');
+    }
+    if (bodyError) throw new Error(bodyError);
     return data as { clientSecret: string; id: string };
   },
 
   /**
-   * Confirm payment success — mark ticket as paid directly in the database.
+   * Confirm payment success — mark ticket as paid and store PaymentIntent id
+   * (same shape InPersonPayment writes to ticket.stripeSession).
    */
-  confirmPaymentSuccess: async (ticketId: string) => {
-    const { error } = await supabase
+  confirmPaymentSuccess: async (
+    ticketId: string,
+    paymentIntentId?: string | null,
+  ) => {
+    const updates: Record<string, unknown> = { paid: true };
+    if (paymentIntentId) {
+      updates.stripeSession = { paymentIntentId };
+    }
+
+    // Auth first (managers / logged-in buyers), then public checkout window.
+    const auth = await supabase
       .from('ticket')
-      .update({ paid: true })
-      .eq('id', ticketId);
-    if (error) throw error;
-    return { success: true };
+      .update(updates)
+      .eq('id', ticketId)
+      .select('id');
+    if (!auth.error && auth.data?.length) {
+      return { success: true, updated: auth.data.length };
+    }
+
+    // Anon cannot RETURNING paid rows — update with exact count, no silent success.
+    const pub = await supabasePublic
+      .from('ticket')
+      .update(updates, { count: 'exact' })
+      .eq('id', ticketId)
+      .eq('paid', false);
+    if (pub.error) {
+      throw new Error(
+        auth.error?.message ||
+          pub.error.message ||
+          'Could not mark ticket paid (blocked by RLS or ticket missing). Try again or contact support.',
+      );
+    }
+    if (!pub.count) {
+      throw new Error(
+        'Could not mark ticket paid — no matching unpaid ticket updated. Confirmation email will not be sent.',
+      );
+    }
+    return { success: true, updated: pub.count };
   },
 
   /**
-   * Send purchase confirmation email to the buyer via Edge Function.
-   * Fire-and-forget — should not block the payment success flow.
+   * Purchase confirmation — same Supabase `send-purchase-email` edge function as the website.
+   * Server refuses to send unless the ticket row is paid=true.
    */
   sendPurchaseEmail: async (params: {
     email: string;
     quantity: number;
     ticketNumber: string;
+    raffleId?: string;
+    organizationLogoUrl?: string | null;
+    ticketId: string;
   }) => {
+    if (!params.ticketId) {
+      throw new Error('ticketId is required to send a purchase confirmation email');
+    }
     const { data, error } = await supabase.functions.invoke('send-purchase-email', {
-      body: params,
+      body: {
+        email: params.email,
+        quantity: params.quantity,
+        ticketNumber: params.ticketNumber,
+        raffleId: params.raffleId ?? '',
+        organizationLogoUrl: params.organizationLogoUrl ?? null,
+        ticketId: params.ticketId,
+      },
     });
     if (error) throw new Error(error.message || 'Failed to send confirmation email');
     if (data?.error) throw new Error(data.error);

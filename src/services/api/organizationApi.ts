@@ -58,6 +58,15 @@ export const organizationApi = {
   },
 
   terminateOrganization: async (organizationId: string): Promise<void> => {
+    await organizationApi.deleteOrganization(organizationId);
+  },
+
+  /**
+   * Hard-delete org + raffles/tickets/workers/owner login (approved or rejected).
+   * Uses action "terminate" for compatibility with currently deployed edge;
+   * deployed manage-organizations also accepts "delete" after you redeploy.
+   */
+  deleteOrganization: async (organizationId: string): Promise<void> => {
     await invokeManageOrganizations<{ success: boolean }>({
       action: 'terminate',
       organizationId,

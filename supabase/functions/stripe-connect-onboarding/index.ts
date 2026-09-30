@@ -57,6 +57,21 @@ function getSupabaseAdmin() {
   );
 }
 
+/** Keep donation_form.stripeAccount in sync with org Connect account. */
+async function syncOrgStripeToRaffles(
+  supabaseAdmin: ReturnType<typeof getSupabaseAdmin>,
+  organizationId: string,
+  stripeAccount: Record<string, unknown>,
+) {
+  const { error } = await supabaseAdmin
+    .from("donation_form")
+    .update({ stripeAccount })
+    .eq("organization_id", organizationId);
+  if (error) {
+    console.error("syncOrgStripeToRaffles:", error.message);
+  }
+}
+
 Deno.serve(async (req: Request) => {
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
@@ -109,6 +124,11 @@ Deno.serve(async (req: Request) => {
         .update({ stripe_account_id: account.id })
         .eq("id", organizationId);
 
+      // Seed raffle stripeAccount so org raffles aren't NULL in DB / admin views
+      await syncOrgStripeToRaffles(supabaseAdmin, organizationId, {
+        id: account.id,
+      });
+
       // Create onboarding link
       const accountLink = await stripePost("/account_links", {
         account: account.id,
@@ -140,6 +160,8 @@ Deno.serve(async (req: Request) => {
         .from("organization")
         .update({ stripe_account_json: account })
         .eq("id", organizationId);
+
+      await syncOrgStripeToRaffles(supabaseAdmin, organizationId, account);
 
       return jsonResponse({
         charges_enabled: account.charges_enabled,

@@ -13,6 +13,14 @@ interface RaffleOrganizationAssignCardProps {
   onUpdated: (patch: Partial<DonationForm>) => void;
 }
 
+function orgHasStripe(org: OrganizationRecord | null): boolean {
+  if (!org) return false;
+  const id = (org as { stripe_account_id?: string | null }).stripe_account_id;
+  const json = (org as { stripe_account_json?: { id?: string } | null })
+    .stripe_account_json;
+  return !!(id || json?.id);
+}
+
 export default function RaffleOrganizationAssignCard({
   raffleId,
   form,
@@ -24,8 +32,9 @@ export default function RaffleOrganizationAssignCard({
   const [isLoadingOrgs, setIsLoadingOrgs] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const hasStripe = !!(form.stripeAccount as { id?: string } | null)?.id;
   const isLinked = !!form.organization_id;
+  const selectedOrg = organizations.find((org) => org.id === selectedOrgId) ?? null;
+  const selectedOrgReady = orgHasStripe(selectedOrg);
 
   const loadOrganizations = useCallback(async () => {
     setIsLoadingOrgs(true);
@@ -45,25 +54,23 @@ export default function RaffleOrganizationAssignCard({
     }
   }, [isLinked, loadOrganizations]);
 
-  const selectedOrg = organizations.find((org) => org.id === selectedOrgId) ?? null;
-
   const handleAssign = () => {
-    if (!selectedOrgId) {
+    if (!selectedOrgId || !selectedOrg) {
       Alert.alert('Select organization', 'Choose an approved organization to link this raffle.');
       return;
     }
-    if (!hasStripe) {
+    if (!selectedOrgReady) {
       Alert.alert(
-        'Stripe required',
-        'Connect Stripe on this raffle before assigning it to an organization.',
+        'Organization Stripe required',
+        'This organization has no Stripe Connect account yet. Ask the org admin to connect Stripe, then try again.',
       );
       return;
     }
 
-    const orgName = selectedOrg?.name ?? 'this organization';
+    const orgName = selectedOrg.name;
     Alert.alert(
       'Assign to organization',
-      `Link this raffle to ${orgName}? The raffle's Stripe account will be used for that organization's ticket sales.`,
+      `Link this raffle to ${orgName}? The organization's Stripe account will be connected to this raffle for ticket sales.`,
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -79,10 +86,15 @@ export default function RaffleOrganizationAssignCard({
                 organization_id: result.raffle.organization_id,
                 organization_name: orgName,
                 organization_approval_status: 'approved',
+                stripeAccount:
+                  result.raffle.stripeAccount ??
+                  (result.stripeAccountId
+                    ? { id: result.stripeAccountId }
+                    : form.stripeAccount),
               });
               Alert.alert(
                 'Assigned',
-                `Raffle linked to ${orgName}. Organization ticket sales will use this raffle's Stripe account.`,
+                `Raffle linked to ${orgName}. This raffle now uses that organization's Stripe account.`,
               );
             } catch (err: any) {
               Alert.alert('Assign failed', err.message || 'Could not assign raffle');
@@ -98,7 +110,7 @@ export default function RaffleOrganizationAssignCard({
   const handleUnassign = () => {
     Alert.alert(
       'Unassign from organization',
-      'Remove this raffle from its organization? The organization will keep any other linked raffles and Stripe will be recalculated from them.',
+      'Remove this raffle from its organization? The organization keeps its Stripe account; this raffle will no longer be linked.',
       [
         { text: 'Cancel', style: 'cancel' },
         {
@@ -132,8 +144,8 @@ export default function RaffleOrganizationAssignCard({
       <Card.Content>
         <Text style={styles.cardTitle}>Organization Assignment</Text>
         <Text style={styles.helperText}>
-          Super admin only. A raffle can belong to one organization. When assigned, this
-          raffle&apos;s Stripe account is used for that organization&apos;s ticket sales.
+          Super admin only. Assign an approved organization and this raffle will use
+          that organization&apos;s Stripe Connect account for ticket sales.
         </Text>
 
         {isLinked ? (
@@ -164,12 +176,6 @@ export default function RaffleOrganizationAssignCard({
           </>
         ) : (
           <>
-            {!hasStripe ? (
-              <Text style={styles.warningText}>
-                Connect Stripe on this raffle before assigning it to an organization.
-              </Text>
-            ) : null}
-
             <Text style={styles.fieldLabel}>Approved organization</Text>
             <Menu
               visible={menuVisible}
@@ -203,7 +209,11 @@ export default function RaffleOrganizationAssignCard({
                   organizations.map((org) => (
                     <Menu.Item
                       key={org.id}
-                      title={org.name}
+                      title={
+                        orgHasStripe(org)
+                          ? org.name
+                          : `${org.name} (no Stripe)`
+                      }
                       onPress={() => {
                         setSelectedOrgId(org.id);
                         setMenuVisible(false);
@@ -219,13 +229,22 @@ export default function RaffleOrganizationAssignCard({
               </ScrollView>
             </Menu>
 
+            {selectedOrg && !selectedOrgReady ? (
+              <Text style={styles.warningText}>
+                This organization has no Stripe Connect account yet. The org admin must
+                connect Stripe before you can assign this raffle.
+              </Text>
+            ) : null}
+
             <Divider style={styles.divider} />
 
             <Button
               mode="contained"
               onPress={handleAssign}
               loading={isSubmitting}
-              disabled={isSubmitting || !selectedOrgId || !hasStripe || isLoadingOrgs}
+              disabled={
+                isSubmitting || !selectedOrgId || !selectedOrgReady || isLoadingOrgs
+              }
               icon="link-variant"
               buttonColor={COLORS.primary}
               style={styles.assignButton}
@@ -260,7 +279,8 @@ const styles = StyleSheet.create({
   warningText: {
     fontSize: 13,
     color: COLORS.warning,
-    marginBottom: 12,
+    marginTop: 10,
+    marginBottom: 0,
     lineHeight: 18,
   },
   fieldLabel: {

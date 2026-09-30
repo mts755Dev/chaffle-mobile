@@ -4,14 +4,16 @@ import {
   StyleSheet,
   FlatList,
   RefreshControl,
+  TouchableOpacity,
 } from 'react-native';
-import { Text, Card, Divider, Icon, Searchbar, Chip } from 'react-native-paper';
+import { Text, Card, Divider, Icon, Chip } from 'react-native-paper';
+import TextInput from '../../../components/AppTextInput';
 import { useFocusEffect } from '@react-navigation/native';
 import { COLORS } from '../../../constants';
 import { useTicketStore, EnrichedWinnerTicket } from '../../../store/ticketStore';
 import { useAuthStore } from '../../../store/authStore';
 import { useRaffleStore } from '../../../store/raffleStore';
-import { formatCurrency, shortId, formatDate } from '../../../utils';
+import { formatCurrency, shortId, formatDate, formatNumber, getTicketReferenceId } from '../../../utils';
 import LoadingScreen from '../../../components/LoadingScreen';
 
 export default function AdminWinnersScreen() {
@@ -20,28 +22,29 @@ export default function AdminWinnersScreen() {
   const { fetchForms } = useRaffleStore();
   const [refreshing, setRefreshing] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
+  const [expandedWinnerId, setExpandedWinnerId] = useState<string | null>(null);
 
   const loadWinners = useCallback(async () => {
-    // Any organization-scoped account (every org_admin / worker with an org)
-    // only sees winners from that organization's raffles — not platform-wide.
-    const isOrgScoped =
-      role === 'org_admin' ||
-      role === 'worker' ||
-      (!!organizationId && role !== 'super_admin');
-
-    if (isOrgScoped) {
-      if (!organizationId) {
-        await fetchWinnerTickets([]);
-        return;
-      }
-      await fetchForms(organizationId);
-      const raffleIds = useRaffleStore.getState().forms.map((f) => f.id);
-      await fetchWinnerTickets(raffleIds);
+    if (role === 'super_admin' || role === null) {
+      await fetchWinnerTickets(undefined);
       return;
     }
 
-    // Super admin (no org scope): all winners
-    await fetchWinnerTickets(undefined);
+    const isOrgScoped = role === 'org_admin' || role === 'worker';
+    if (!isOrgScoped) {
+      await fetchWinnerTickets(undefined);
+      return;
+    }
+
+    if (!organizationId) {
+      // Don't blank the list while org id is still resolving.
+      await fetchWinnerTickets(undefined);
+      return;
+    }
+
+    await fetchForms(organizationId);
+    const raffleIds = useRaffleStore.getState().forms.map((f) => f.id);
+    await fetchWinnerTickets(raffleIds);
   }, [role, organizationId, fetchForms, fetchWinnerTickets]);
 
   useFocusEffect(
@@ -56,13 +59,16 @@ export default function AdminWinnersScreen() {
     setRefreshing(false);
   };
 
-  // Filter by name (matches web's filterColumn="buyerName")
   const filteredWinners = winnerTickets.filter((t) => {
-    const query = searchQuery.toLowerCase();
+    const query = searchQuery.trim().toLowerCase();
+    if (!query) return true;
+    const referenceId = getTicketReferenceId(t.id).toLowerCase();
     return (
       t.buyerName.toLowerCase().includes(query) ||
       t.buyerEmail.toLowerCase().includes(query) ||
-      t.id.toLowerCase().includes(query)
+      t.id.toLowerCase().includes(query) ||
+      referenceId.includes(query) ||
+      shortId(t.id).toLowerCase().includes(query)
     );
   });
 
@@ -70,99 +76,136 @@ export default function AdminWinnersScreen() {
     const raffleTitle = (item.donation_form as any)?.title || 'N/A';
     const totalAmount = item.totalAmount ?? 0;
     const estimatedAmount = item.estimatedAmount ?? 0;
+    const expanded = expandedWinnerId === item.id;
 
     return (
       <Card style={styles.card}>
         <Card.Content>
-          {/* Header: Trophy + Name + Chips */}
-          <View style={styles.headerRow}>
-            <View style={styles.trophyNameRow}>
-              <Icon source="trophy" size={24} color={COLORS.gold} />
-              <View style={styles.nameBlock}>
-                <Text style={styles.name}>{item.buyerName}</Text>
-                <Text style={styles.email}>{item.buyerEmail}</Text>
+          <TouchableOpacity
+            onPress={() =>
+              setExpandedWinnerId((current) =>
+                current === item.id ? null : item.id,
+              )
+            }
+            activeOpacity={0.7}
+          >
+            <View style={styles.headerRow}>
+              <View style={styles.trophyNameRow}>
+                <Icon source="trophy" size={24} color={COLORS.gold} />
+                <View style={styles.nameBlock}>
+                  <Text style={styles.name}>{item.buyerName}</Text>
+                  <Text style={styles.email}>{item.buyerEmail}</Text>
+                </View>
               </View>
-            </View>
-            <View style={styles.chipRow}>
-              {item.isFree ? (
-                <Chip style={styles.freeChip} textStyle={styles.freeChipText} compact>
-                  Free
-                </Chip>
-              ) : (
-                <Chip style={styles.paidChip} textStyle={styles.paidChipText} compact>
-                  Paid
-                </Chip>
-              )}
-            </View>
-          </View>
-
-          <Divider style={styles.divider} />
-
-          {/* Detail grid — matches web table columns */}
-          <View style={styles.detailGrid}>
-            <View style={styles.detailCell}>
-              <Text style={styles.label}>Ticket ID</Text>
-              <Text style={styles.value}>#{shortId(item.id)}</Text>
-            </View>
-            <View style={styles.detailCell}>
-              <Text style={styles.label}>Paid Amount</Text>
-              <Text style={styles.value}>{formatCurrency(item.amount)}</Text>
-            </View>
-            <View style={styles.detailCell}>
-              <Text style={styles.label}>Quantity</Text>
-              <Text style={styles.value}>{item.quantity}</Text>
-            </View>
-            <View style={styles.detailCell}>
-              <Text style={styles.label}>Total Price</Text>
-              <Text style={[styles.value, { color: COLORS.primary }]}>
-                {formatCurrency(totalAmount)}
-              </Text>
-            </View>
-            <View style={styles.detailCell}>
-              <Text style={styles.label}>Estimated Prize</Text>
-              <Text style={[styles.value, { color: COLORS.success }]}>
-                {formatCurrency(estimatedAmount)}
-              </Text>
-            </View>
-            <View style={styles.detailCell}>
-              <Text style={styles.label}>Free Ticket</Text>
-              <Text style={[styles.value, { color: item.isFree ? '#2563EB' : COLORS.textSecondary }]}>
-                {item.isFree ? 'Yes' : 'No'}
-              </Text>
-            </View>
-          </View>
-
-          <Divider style={styles.divider} />
-
-          {/* Bottom info: Phone, Address, Raffle, Date */}
-          <View style={styles.bottomInfo}>
-            {item.phone && (
-              <View style={styles.infoRow}>
-                <Icon source="phone" size={14} color={COLORS.textLight} />
-                <Text style={styles.infoText}>{item.phone}</Text>
+              <View style={styles.chipRow}>
+                {item.isFree ? (
+                  <Chip style={styles.freeChip} textStyle={styles.freeChipText} compact>
+                    Free
+                  </Chip>
+                ) : (
+                  <Chip style={styles.paidChip} textStyle={styles.paidChipText} compact>
+                    Paid
+                  </Chip>
+                )}
               </View>
-            )}
-            {item.address && (
-              <View style={styles.infoRow}>
-                <Icon source="map-marker" size={14} color={COLORS.textLight} />
-                <Text style={styles.infoText} numberOfLines={1}>
-                  {item.address}
-                </Text>
+              <Icon
+                source={expanded ? 'chevron-up' : 'chevron-down'}
+                size={22}
+                color={COLORS.textSecondary}
+              />
+            </View>
+          </TouchableOpacity>
+
+          {expanded ? (
+            <>
+              <Divider style={styles.divider} />
+
+              <View style={styles.detailGrid}>
+                <View style={styles.detailCell}>
+                  <Text style={styles.label}>Ticket ID</Text>
+                  <Text style={styles.value}>#{shortId(item.id)}</Text>
+                </View>
+                <View style={styles.detailCell}>
+                  <Text style={styles.label}>Paid Amount</Text>
+                  <Text style={styles.value}>
+                    {formatCurrency(item.amount)}
+                  </Text>
+                </View>
+                <View style={styles.detailCell}>
+                  <Text style={styles.label}>Quantity</Text>
+                  <Text style={styles.value}>
+                    {formatNumber(item.quantity)}
+                  </Text>
+                </View>
+                <View style={styles.detailCell}>
+                  <Text style={styles.label}>Total Price</Text>
+                  <Text style={[styles.value, { color: COLORS.primary }]}>
+                    {formatCurrency(totalAmount)}
+                  </Text>
+                </View>
+                <View style={styles.detailCell}>
+                  <Text style={styles.label}>Estimated Prize</Text>
+                  <Text style={[styles.value, { color: COLORS.success }]}>
+                    {formatCurrency(estimatedAmount)}
+                  </Text>
+                </View>
+                <View style={styles.detailCell}>
+                  <Text style={styles.label}>Free Ticket</Text>
+                  <Text
+                    style={[
+                      styles.value,
+                      {
+                        color: item.isFree
+                          ? '#2563EB'
+                          : COLORS.textSecondary,
+                      },
+                    ]}
+                  >
+                    {item.isFree ? 'Yes' : 'No'}
+                  </Text>
+                </View>
               </View>
-            )}
-            <View style={styles.infoRow}>
-              <Icon source="ticket" size={14} color={COLORS.textLight} />
-              <Text style={styles.infoText} numberOfLines={1}>
-                {raffleTitle}
-              </Text>
-            </View>
-            <View style={styles.infoRow}>
-              <Icon source="calendar" size={14} color={COLORS.textLight} />
-              <Text style={styles.infoText}>
-                {formatDate(item.created_at, 'MMM D, YYYY h:mm A')}
-              </Text>
-            </View>
-          </View>
+
+              <Divider style={styles.divider} />
+
+              <View style={styles.bottomInfo}>
+                {item.phone && (
+                  <View style={styles.infoRow}>
+                    <Icon source="phone" size={14} color={COLORS.textLight} />
+                    <Text style={styles.infoText}>{item.phone}</Text>
+                  </View>
+                )}
+                {item.address && (
+                  <View style={styles.infoRow}>
+                    <Icon
+                      source="map-marker"
+                      size={14}
+                      color={COLORS.textLight}
+                    />
+                    <Text style={styles.infoText} numberOfLines={1}>
+                      {item.address}
+                    </Text>
+                  </View>
+                )}
+                <View style={styles.infoRow}>
+                  <Icon source="ticket" size={14} color={COLORS.textLight} />
+                  <Text style={styles.infoText} numberOfLines={1}>
+                    {raffleTitle}
+                  </Text>
+                </View>
+                <View style={styles.infoRow}>
+                  <Icon
+                    source="calendar"
+                    size={14}
+                    color={COLORS.textLight}
+                  />
+                  <Text style={styles.infoText}>
+                    {formatDate(item.created_at, 'MMM D, YYYY h:mm A')}
+                  </Text>
+                </View>
+              </View>
+            </>
+          ) : null}
         </Card.Content>
       </Card>
     );
@@ -174,17 +217,31 @@ export default function AdminWinnersScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Filter — matches web's filterColumn="buyerName" */}
-      <Searchbar
-        placeholder="Filter by name, email, or ticket ID…"
-        onChangeText={setSearchQuery}
+      <TextInput
+        mode="outlined"
+        placeholder="Search..."
         value={searchQuery}
-        style={styles.searchbar}
-        inputStyle={styles.searchInput}
+        onChangeText={setSearchQuery}
+        style={styles.filterInput}
+        outlineColor={COLORS.border}
+        activeOutlineColor={COLORS.primary}
+        textColor={COLORS.foreground}
+        placeholderTextColor={COLORS.textLight}
+        dense
+        left={<TextInput.Icon icon="magnify" color={COLORS.textLight} />}
+        right={
+          searchQuery ? (
+            <TextInput.Icon
+              icon="close"
+              onPress={() => setSearchQuery('')}
+              color={COLORS.textLight}
+            />
+          ) : undefined
+        }
       />
 
-      <Text style={styles.sectionTitle}>
-        Winners ({filteredWinners.length})
+      <Text style={styles.count}>
+        {filteredWinners.length} winner{filteredWinners.length !== 1 ? 's' : ''}
       </Text>
 
       <FlatList
@@ -212,25 +269,18 @@ const styles = StyleSheet.create({
     backgroundColor: COLORS.background,
   },
 
-  /* Search */
-  searchbar: {
-    marginHorizontal: 12,
-    marginBottom: 8,
-    elevation: 2,
+  filterInput: {
     backgroundColor: COLORS.white,
-    borderRadius: 10,
-  },
-  searchInput: {
+    marginHorizontal: 12,
+    marginTop: 12,
+    marginBottom: 4,
     fontSize: 14,
   },
-
-  sectionTitle: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: COLORS.foreground,
+  count: {
+    fontSize: 13,
+    color: COLORS.textSecondary,
     paddingHorizontal: 16,
-    marginTop: 4,
-    marginBottom: 8,
+    marginBottom: 4,
   },
 
   list: {
@@ -252,7 +302,8 @@ const styles = StyleSheet.create({
   headerRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'flex-start',
+    alignItems: 'center',
+    gap: 8,
   },
   trophyNameRow: {
     flexDirection: 'row',

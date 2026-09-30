@@ -1,9 +1,9 @@
 import React, { useEffect, useState, Component, ErrorInfo } from 'react';
 import { StatusBar } from 'expo-status-bar';
+import { AppState, StyleSheet, View, Text, ScrollView } from 'react-native';
 import { PaperProvider } from 'react-native-paper';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { SafeAreaProvider } from 'react-native-safe-area-context';
-import { StyleSheet, View, Text, ScrollView } from 'react-native';
 import { StripeProvider } from '@stripe/stripe-react-native';
 import * as ExpoSplashScreen from 'expo-splash-screen';
 import AppNavigator from './src/navigation/AppNavigator';
@@ -72,7 +72,7 @@ class ErrorBoundary extends Component<{ children: React.ReactNode }, ErrorBounda
 const INIT_TIMEOUT_MS = 5000;
 
 function AppContent() {
-  const { initialize } = useAuthStore();
+  const { initialize, enforceSessionWindow } = useAuthStore();
   const [appReady, setAppReady] = useState(false);
   const [splashDone, setSplashDone] = useState(false);
 
@@ -96,6 +96,15 @@ function AppContent() {
 
     return () => clearTimeout(timeout);
   }, []);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (next) => {
+      if (next === 'active') {
+        void enforceSessionWindow();
+      }
+    });
+    return () => sub.remove();
+  }, [enforceSessionWindow]);
 
   useEffect(() => {
     if (appReady) {

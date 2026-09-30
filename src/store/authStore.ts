@@ -1,22 +1,51 @@
 import { create } from 'zustand';
+import * as SecureStore from 'expo-secure-store';
 import { supabase } from '../services/supabase/client';
 import { clearTapToPayTermsSession } from '../services/tapToPayTermsState';
 import { useRaffleStore } from './raffleStore';
 import { useTicketStore } from './ticketStore';
-import { deriveAdminRole, isSuperAdminUser } from '../utils/authRoles';
+import {
+  deriveAdminRole,
+  readMetadataRole,
+} from '../utils/authRoles';
+import { fetchOwnedOrganizationIds } from '../services/api/raffleApi';
 import type { User, Session } from '@supabase/supabase-js';
-import type { AdminRole, OrgApprovalStatus } from '../types';
+import type { AdminRole, OrgApprovalStatus, Worker } from '../types';
 
 /** Prevents onAuthStateChange from overwriting login/signup state mid-flow. */
 let authFlowInProgress = false;
 
+/** App admin/org/worker soft session cap (client requirement). */
+const ADMIN_SESSION_STARTED_KEY = 'chaffle_admin_session_started_at';
+const ADMIN_SESSION_MAX_MS = 2 * 60 * 60 * 1000;
+
+async function readSessionStartedAt(): Promise<number | null> {
+  try {
+    const raw = await SecureStore.getItemAsync(ADMIN_SESSION_STARTED_KEY);
+    if (!raw) return null;
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeSessionStartedAt(ts: number): Promise<void> {
+  try {
+    await SecureStore.setItemAsync(ADMIN_SESSION_STARTED_KEY, String(ts));
+  } catch {}
+}
+
+async function clearSessionStartedAt(): Promise<void> {
+  try {
+    await SecureStore.deleteItemAsync(ADMIN_SESSION_STARTED_KEY);
+  } catch {}
+}
+
 /** Workers may use the app but cannot accept Tap to Pay Terms (3.8 / 3.8.1). */
 function resolveCanManageTapToPay(user: User | null): boolean {
   if (!user) return false;
-  const role =
-    (user.app_metadata?.role as string | undefined) ??
-    (user.user_metadata?.role as string | undefined);
-  return role !== 'worker';
+  return readMetadataRole(user) !== 'worker';
 }
 
 interface AuthState {
@@ -36,22 +65,29 @@ interface AuthState {
   error: string | null;
 
   initialize: () => Promise<void>;
+  /** Returns false if the local 2h admin session expired and user was signed out. */
+  enforceSessionWindow: () => Promise<boolean>;
   login: (email: string, password: string) => Promise<void>;
   signup: (email: string, password: string, organizationName: string) => Promise<void>;
-  createWorker: (email: string, password: string, raffleId: string, organizationId: string | null, durationHours: number) => Promise<void>;
+  createWorker: (
+    email: string,
+    password: string,
+    raffleId: string,
+    organizationId: string | null,
+    durationHours: number,
+  ) => Promise<Worker | void>;
   connectStripe: () => Promise<string>;
   refreshStripeStatus: () => Promise<{ charges_enabled: boolean }>;
   refreshOrgState: () => Promise<void>;
+  updateOrganizationProfile: (payload: {
+    name: string;
+  }) => Promise<void>;
+  updatePassword: (payload: {
+    currentPassword: string;
+    newPassword: string;
+  }) => Promise<void>;
   logout: () => Promise<void>;
   clearError: () => void;
-}
-
-function readMetadataRole(user: User | null): string | undefined {
-  if (!user) return undefined;
-  return (
-    (user.app_metadata?.role as string | undefined) ??
-    (user.user_metadata?.role as string | undefined)
-  );
 }
 
 function deriveRole(user: User | null): AdminRole | null {
@@ -110,30 +146,6 @@ async function refreshAuthUser(
   return { user: data.session.user, session: data.session };
 }
 
-/** Legacy web super admins may lack role=admin in JWT; patch so RLS policies work. */
-async function ensureSuperAdminJwtMetadata(
-  user: User,
-  session: Session | null,
-): Promise<{ user: User; session: Session | null }> {
-  if (!isSuperAdminUser(user)) {
-    return { user, session };
-  }
-
-  if (readMetadataRole(user) === 'admin') {
-    return { user, session };
-  }
-
-  const { error } = await supabase.auth.updateUser({
-    data: { role: 'admin' },
-  });
-
-  if (error) {
-    return { user, session };
-  }
-
-  return refreshAuthUser(user, session);
-}
-
 function isWorkerExpired(user: User | null): boolean {
   if (!user) return false;
   const expiresAt = user.user_metadata?.expires_at;
@@ -167,9 +179,8 @@ async function fetchOrgState(orgId: string): Promise<{
   }
   const stripeJson = data.stripe_account_json as { charges_enabled?: boolean; id?: string } | null;
   const stripeAccountId = data.stripe_account_id ?? stripeJson?.id ?? null;
-  const connected =
-    !!stripeJson?.charges_enabled ||
-    !!stripeAccountId;
+  // Account ID alone means onboarding started — only charges_enabled means ready.
+  const connected = !!stripeJson?.charges_enabled;
   return {
     id: stripeAccountId,
     connected,
@@ -200,10 +211,35 @@ function buildAuthPatch(
     orgApprovalStatus?: OrgApprovalStatus | null;
   },
 ) {
-  const role = deriveRole(user) ?? preserve?.role ?? null;
-  const organizationId = deriveOrgId(user) ?? preserve?.organizationId ?? null;
+  if (!user) {
+    return {
+      user: null,
+      session: null,
+      isAdmin: false,
+      canManageTapToPay: false,
+      role: null,
+      organizationId: null,
+      organizationName: null,
+      raffleId: null,
+      orgStripeAccountId: null,
+      orgStripeConnected: false,
+      orgApprovalStatus: null,
+    };
+  }
+
+  const derivedRole = deriveRole(user);
+  const role = derivedRole ?? preserve?.role ?? null;
+
+  // Super admin must never inherit a stale org scope from a previous session.
+  const organizationId =
+    role === 'super_admin'
+      ? null
+      : deriveOrgId(user) ?? preserve?.organizationId ?? null;
+
   const organizationName =
-    deriveOrgName(user) ?? preserve?.organizationName ?? orgState.name;
+    role === 'super_admin'
+      ? null
+      : deriveOrgName(user) ?? preserve?.organizationName ?? orgState.name;
   const orgApprovalStatus =
     role === 'org_admin'
       ? orgState.approvalStatus ?? preserve?.orgApprovalStatus ?? null
@@ -212,14 +248,14 @@ function buildAuthPatch(
   return {
     user,
     session,
-    isAdmin: !!user && role !== null,
+    isAdmin: role !== null,
     canManageTapToPay: resolveCanManageTapToPay(user),
     role,
     organizationId,
     organizationName,
-    raffleId: deriveRaffleId(user),
-    orgStripeAccountId: orgState.id,
-    orgStripeConnected: orgState.connected,
+    raffleId: role === 'worker' ? deriveRaffleId(user) : null,
+    orgStripeAccountId: role === 'super_admin' ? null : orgState.id,
+    orgStripeConnected: role === 'super_admin' ? false : orgState.connected,
     orgApprovalStatus,
   };
 }
@@ -250,16 +286,25 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         let user = data.session.user;
         let session = data.session;
 
+        let startedAt = await readSessionStartedAt();
+        if (!startedAt) {
+          startedAt = Date.now();
+          await writeSessionStartedAt(startedAt);
+        }
+        if (Date.now() - startedAt > ADMIN_SESSION_MAX_MS) {
+          await clearSessionStartedAt();
+          await supabase.auth.signOut();
+          set({ isLoading: false, error: 'Session expired — please sign in again' });
+          return;
+        }
+
         if (deriveRole(user) === 'worker' && isWorkerExpired(user)) {
           await purgeExpiredWorkerAccount();
+          await clearSessionStartedAt();
           await supabase.auth.signOut();
           set({ isLoading: false, error: 'Your worker account has expired' });
           return;
         }
-
-        const synced = await ensureSuperAdminJwtMetadata(user, session);
-        user = synced.user;
-        session = synced.session ?? session;
 
         const orgId = deriveOrgId(user);
         let orgState = {
@@ -283,6 +328,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
           isLoading: false,
         });
       } else {
+        await clearSessionStartedAt();
         set({ isLoading: false });
       }
 
@@ -295,6 +341,7 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
           if (user && deriveRole(user) === 'worker' && isWorkerExpired(user)) {
             await purgeExpiredWorkerAccount();
+            await clearSessionStartedAt();
             await supabase.auth.signOut();
             useRaffleStore.getState().reset();
             useTicketStore.getState().reset();
@@ -315,14 +362,22 @@ export const useAuthStore = create<AuthState>((set, get) => ({
             return;
           }
 
-          const orgId = deriveOrgId(user) ?? prev.organizationId;
+          if (!user) {
+            await clearSessionStartedAt();
+          }
+
+          const derivedRole = deriveRole(user);
+          const orgId =
+            derivedRole === 'super_admin'
+              ? null
+              : deriveOrgId(user) ?? prev.organizationId;
           let orgState = {
             id: null as string | null,
             connected: false,
             name: null as string | null,
             approvalStatus: null as OrgApprovalStatus | null,
           };
-          const resolvedRole = deriveRole(user) ?? prev.role;
+          const resolvedRole = derivedRole ?? prev.role;
           if (user && orgId) {
             if (
               shouldLoadOrgStripe(user) ||
@@ -332,12 +387,27 @@ export const useAuthStore = create<AuthState>((set, get) => ({
             }
           }
 
+          console.log('[auth.onAuthStateChange]', {
+            derivedRole,
+            resolvedRole,
+            orgId,
+            email: user?.email,
+          });
+
           set(
             buildAuthPatch(user, session, orgState, {
-              role: prev.role,
-              organizationId: prev.organizationId,
-              organizationName: prev.organizationName,
-              orgApprovalStatus: prev.orgApprovalStatus,
+              // Only preserve role when JWT has no role claim yet (legacy).
+              role: derivedRole ? undefined : prev.role,
+              organizationId:
+                derivedRole === 'super_admin'
+                  ? null
+                  : derivedRole
+                    ? deriveOrgId(user)
+                    : prev.organizationId,
+              organizationName:
+                derivedRole === 'super_admin' ? null : prev.organizationName,
+              orgApprovalStatus:
+                derivedRole === 'org_admin' ? prev.orgApprovalStatus : null,
             }),
           );
         })();
@@ -345,6 +415,27 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     } catch {
       set({ isLoading: false });
     }
+  },
+
+  enforceSessionWindow: async () => {
+    const { user, session } = get();
+    if (!user || !session) return true;
+
+    const startedAt = await readSessionStartedAt();
+    if (!startedAt) {
+      await writeSessionStartedAt(Date.now());
+      return true;
+    }
+    if (Date.now() - startedAt <= ADMIN_SESSION_MAX_MS) {
+      return true;
+    }
+
+    await get().logout();
+    set((state) => ({
+      ...state,
+      error: 'Session expired — please sign in again',
+    }));
+    return false;
   },
 
   login: async (email: string, password: string) => {
@@ -376,36 +467,80 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
       if (
         readMetadataRole(user) === 'org_admin' &&
-        !deriveOrgId(user) &&
-        user.user_metadata?.organization_name
+        !deriveOrgId(user)
       ) {
-        const orgName = user.user_metadata.organization_name;
-        const { data: orgData } = await supabase
+        // Reuse an org this user already owns before minting a new empty one.
+        const { data: existingOwned } = await supabase
           .from('organization')
-          .insert({
-            name: orgName,
-            owner_id: user.id,
-            contact_email: normalizedEmail,
-            approval_status: 'pending',
-          })
-          .select()
-          .single();
+          .select('id, name')
+          .eq('owner_id', user.id)
+          .order('created_at', { ascending: false })
+          .limit(1)
+          .maybeSingle();
 
-        if (orgData) {
+        if (existingOwned?.id) {
           await supabase.auth.updateUser({
             data: {
-              organization_id: orgData.id,
-              organization_name: orgName,
+              role: 'org_admin',
+              organization_id: existingOwned.id,
+              organization_name: existingOwned.name,
             },
           });
+        } else if (user.user_metadata?.organization_name) {
+          const orgName = user.user_metadata.organization_name as string;
+          const { data: orgData } = await supabase
+            .from('organization')
+            .insert({
+              name: orgName,
+              owner_id: user.id,
+              contact_email: normalizedEmail,
+              approval_status: 'pending',
+            })
+            .select()
+            .single();
+
+          if (orgData) {
+            await supabase.auth.updateUser({
+              data: {
+                organization_id: orgData.id,
+                organization_name: orgName,
+              },
+            });
+          }
+        }
+      } else if (
+        readMetadataRole(user) === 'org_admin' &&
+        deriveOrgId(user)
+      ) {
+        // If metadata points at an org they don't own, snap back to an owned org.
+        const metaOrgId = deriveOrgId(user)!;
+        const ownedIds = await fetchOwnedOrganizationIds(user.id);
+        if (ownedIds.length > 0 && !ownedIds.includes(metaOrgId)) {
+          const { data: primary } = await supabase
+            .from('organization')
+            .select('id, name')
+            .eq('owner_id', user.id)
+            .order('created_at', { ascending: true })
+            .limit(1)
+            .maybeSingle();
+          if (primary?.id) {
+            console.warn('[auth.login] remapping stale organization_id', {
+              from: metaOrgId,
+              to: primary.id,
+            });
+            await supabase.auth.updateUser({
+              data: {
+                role: 'org_admin',
+                organization_id: primary.id,
+                organization_name: primary.name,
+              },
+            });
+          }
         }
       }
 
       const refreshed = await refreshAuthUser(user, data.session);
       user = refreshed.user;
-
-      const synced = await ensureSuperAdminJwtMetadata(user, refreshed.session);
-      user = synced.user;
 
       const loginOrgId = deriveOrgId(user);
       let loginOrgState = {
@@ -429,8 +564,9 @@ export const useAuthStore = create<AuthState>((set, get) => ({
 
       await prefetchAdminHomeData(user);
 
+      await writeSessionStartedAt(Date.now());
       set({
-        ...buildAuthPatch(user, synced.session ?? refreshed.session, loginOrgState),
+        ...buildAuthPatch(user, refreshed.session, loginOrgState),
         isLoading: false,
       });
     } catch (err: any) {
@@ -529,7 +665,8 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     organizationId: string | null,
     durationHours: number,
   ) => {
-    set({ isLoading: true, error: null });
+    // Do NOT set auth isLoading — AppNavigator unmounts the whole stack when it is true.
+    set({ error: null });
     try {
       const normalizedEmail = email.trim().toLowerCase();
 
@@ -566,17 +703,23 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         throw new Error(detailedMessage);
       }
 
-      set({ isLoading: false, error: null });
+      set({ error: null });
+      return data?.worker as Worker | undefined;
     } catch (err: any) {
       const message = err?.message || 'Failed to create worker';
-      set({ error: message, isLoading: false });
+      set({ error: message });
       throw new Error(message);
     }
   },
 
   connectStripe: async () => {
-    const { organizationId } = get();
+    const { organizationId, role, orgApprovalStatus } = get();
     if (!organizationId) throw new Error('No organization found');
+    if (role === 'org_admin' && orgApprovalStatus !== 'approved') {
+      throw new Error(
+        'Stripe Connect is available after a super admin approves your organization.',
+      );
+    }
 
     const { data, error } = await supabase.functions.invoke('stripe-connect-onboarding', {
       body: { action: 'create', organizationId },
@@ -619,30 +762,86 @@ export const useAuthStore = create<AuthState>((set, get) => ({
     });
   },
 
+  updateOrganizationProfile: async ({ name }) => {
+    const { organizationId, user, session, role } = get();
+    if (role !== 'org_admin') {
+      throw new Error('Only organization admins can update organization profile');
+    }
+    if (!organizationId || !user) {
+      throw new Error('No organization found');
+    }
+
+    const trimmed = name.trim();
+    if (trimmed.length < 2) {
+      throw new Error('Organization name must be at least 2 characters');
+    }
+
+    const { error: orgError } = await supabase
+      .from('organization')
+      .update({ name: trimmed })
+      .eq('id', organizationId)
+      .eq('owner_id', user.id);
+
+    if (orgError) throw new Error(orgError.message || 'Failed to update organization');
+
+    const { data: updatedUserData, error: metaError } = await supabase.auth.updateUser({
+      data: {
+        organization_name: trimmed,
+      },
+    });
+
+    if (metaError) throw new Error(metaError.message || 'Failed to update profile');
+
+    const nextUser = updatedUserData.user ?? user;
+    set({
+      user: nextUser,
+      organizationName: trimmed,
+      session: session,
+    });
+  },
+
+  updatePassword: async ({ currentPassword, newPassword }) => {
+    const { user } = get();
+    const email = user?.email;
+    if (!email) throw new Error('No signed-in user');
+
+    const { error: reauthError } = await supabase.auth.signInWithPassword({
+      email,
+      password: currentPassword,
+    });
+    if (reauthError) {
+      throw new Error('Current password is incorrect');
+    }
+
+    const { error } = await supabase.auth.updateUser({ password: newPassword });
+    if (error) throw new Error(error.message || 'Failed to update password');
+  },
+
   logout: async () => {
     set({ isLoading: true });
     try {
       await supabase.auth.signOut();
-      clearTapToPayTermsSession();
-      useRaffleStore.getState().reset();
-      useTicketStore.getState().reset();
-      set({
-        user: null,
-        session: null,
-        isAdmin: false,
-        canManageTapToPay: false,
-        role: null,
-        organizationId: null,
-        organizationName: null,
-        raffleId: null,
-        orgStripeAccountId: null,
-        orgStripeConnected: false,
-        orgApprovalStatus: null,
-        isLoading: false,
-      });
     } catch {
-      set({ isLoading: false });
+      // Still clear local session even if remote sign-out fails
     }
+    await clearSessionStartedAt();
+    clearTapToPayTermsSession();
+    useRaffleStore.getState().reset();
+    useTicketStore.getState().reset();
+    set({
+      user: null,
+      session: null,
+      isAdmin: false,
+      canManageTapToPay: false,
+      role: null,
+      organizationId: null,
+      organizationName: null,
+      raffleId: null,
+      orgStripeAccountId: null,
+      orgStripeConnected: false,
+      orgApprovalStatus: null,
+      isLoading: false,
+    });
   },
 
   clearError: () => set({ error: null }),

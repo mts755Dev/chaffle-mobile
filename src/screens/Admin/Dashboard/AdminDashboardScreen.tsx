@@ -7,6 +7,7 @@ import {
   TouchableOpacity,
   Alert,
   Platform,
+  AppState,
 } from 'react-native';
 import {
   Text,
@@ -14,9 +15,11 @@ import {
   Card,
   Chip,
   FAB,
-  Divider,
   IconButton,
   Icon,
+  Dialog,
+  Portal,
+  Paragraph,
 } from 'react-native-paper';
 import TextInput from '../../../components/AppTextInput';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -26,22 +29,25 @@ import { COLORS } from '../../../constants';
 import { RootStackParamList, TicketTotalByRaffle } from '../../../types';
 import { useRaffleStore } from '../../../store/raffleStore';
 import { useAuthStore } from '../../../store/authStore';
-import { formatCurrency } from '../../../utils';
+import { formatCurrency, formatNumber } from '../../../utils';
 import LoadingScreen from '../../../components/LoadingScreen';
+import { subscribePaidTicketChanges } from '../../../services/ticketTotalsLive';
 import TapToPayIcon from '../../../components/TapToPayIcon';
 import {
   canSetupTapToPayOnDevice,
   canUseInPersonPayment,
+  isTapToPayPaymentReady,
   showOrgStripeRequiredAlert,
+  showRaffleStripeRequiredAlert,
   showTapToPayAdminRequiredAlert,
   usesOrganizationStripe,
 } from '../../../utils/tapToPayAccess';
 import {
   canOrgCreateRaffles,
+  canOrgConnectStripe,
   getOrgApprovalBannerMessage,
 } from '../../../utils/orgAccess';
 import { formatOrganizationLabel } from '../../../utils/orgDisplay';
-import { organizationApi } from '../../../services/api/organizationApi';
 import DownloadTicketsCsvButton from '../../../components/DownloadTicketsCsvButton';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -71,62 +77,117 @@ export default function AdminDashboardScreen() {
     fetchForms,
     fetchTicketTotals,
     fetchCompletedRaffleIds,
+    deleteForm,
+    updateForm,
   } = useRaffleStore();
 
   const isOrgAdmin = role === 'org_admin';
   const isSuperAdmin = role === 'super_admin';
   const canCreateRaffles = canOrgCreateRaffles(role, orgApprovalStatus);
+  const canConnectStripe = canOrgConnectStripe(role, orgApprovalStatus);
   const approvalBannerMessage = isOrgAdmin
     ? getOrgApprovalBannerMessage(orgApprovalStatus)
     : null;
 
   const [refreshing, setRefreshing] = useState(false);
   const [filterText, setFilterText] = useState('');
+  const [statusFilter, setStatusFilter] = useState<'all' | 'active' | 'completed'>(
+    'all',
+  );
   const [isConnectingStripe, setIsConnectingStripe] = useState(false);
   const [isRefreshingStripe, setIsRefreshingStripe] = useState(false);
-  const [pendingOrgCount, setPendingOrgCount] = useState(0);
+  const [expandedRaffleId, setExpandedRaffleId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{
+    id: string;
+    title: string;
+  } | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+  const [togglingLocationId, setTogglingLocationId] = useState<string | null>(
+    null,
+  );
 
   const showTapToPayFeatures =
     Platform.OS === 'ios' && canSetupTapToPayOnDevice(isAdmin, role);
 
-  // Filter forms by title
-  const filteredForms = filterText.trim()
-    ? forms.filter((f) =>
-        (f.title || '').toLowerCase().includes(filterText.toLowerCase()),
-      )
-    : forms;
+  const isCompleted = (raffleId: string): boolean => {
+    return completedRaffleIds.includes(raffleId);
+  };
+
+  // Status comes from DB via winner tickets (completed) vs none (active).
+  const filteredForms = forms.filter((f) => {
+    const completed = isCompleted(f.id);
+    if (statusFilter === 'active' && completed) return false;
+    if (statusFilter === 'completed' && !completed) return false;
+    const query = filterText.trim().toLowerCase();
+    if (!query) return true;
+    return (f.title || '').toLowerCase().includes(query);
+  });
 
   const loadData = useCallback(async () => {
     if (role === null) return;
+
+    console.log('[AdminDashboard.loadData]', { role, organizationId, isSuperAdmin });
+
+    // Anyone who is not a scoped org/worker account gets the full platform list.
+    const orgScoped = role === 'org_admin' || role === 'worker';
+    if (!orgScoped || isSuperAdmin) {
+      await fetchForms(undefined);
+      const loaded = useRaffleStore.getState().forms;
+      console.log('[AdminDashboard] forms after fetch', loaded.length);
+      const raffleIds = loaded.map((f) => f.id);
+      await Promise.all([
+        fetchTicketTotals(undefined, raffleIds.length > 0 ? raffleIds : undefined),
+        fetchCompletedRaffleIds(raffleIds.length > 0 ? raffleIds : undefined),
+      ]);
+      return;
+    }
+
     if (role === 'org_admin' && !organizationId) {
       await refreshOrgState();
+      const orgId = useAuthStore.getState().organizationId;
+      if (!orgId) {
+        await fetchForms(undefined);
+        await Promise.all([
+          fetchTicketTotals(undefined, undefined),
+          fetchCompletedRaffleIds(undefined),
+        ]);
+        return;
+      }
+      await fetchForms(orgId);
+      console.log('[AdminDashboard] forms after org fetch', useRaffleStore.getState().forms.length, {
+        orgId,
+      });
+      const { forms: loadedForms } = useRaffleStore.getState();
+      const raffleIds = loadedForms.map((f) => f.id);
+      await Promise.all([
+        fetchTicketTotals(undefined, raffleIds),
+        fetchCompletedRaffleIds(raffleIds),
+      ]);
       return;
     }
 
     if (role === 'org_admin') {
       await refreshOrgState();
     }
-    if (role === 'super_admin') {
-      try {
-        const count = await organizationApi.countPendingOrganizations();
-        setPendingOrgCount(count);
-      } catch {
-        setPendingOrgCount(0);
-      }
-    }
 
-    const orgId = role === 'org_admin' ? organizationId : undefined;
+    const orgId =
+      role === 'org_admin'
+        ? useAuthStore.getState().organizationId ?? organizationId
+        : undefined;
     await fetchForms(orgId);
+    console.log('[AdminDashboard] forms after org fetch', useRaffleStore.getState().forms.length, {
+      orgId,
+    });
     const { forms: loadedForms } = useRaffleStore.getState();
-    const raffleIds = role === 'org_admin'
-      ? loadedForms.map((f) => f.id)
-      : undefined;
+    const raffleIds =
+      role === 'org_admin' ? loadedForms.map((f) => f.id) : undefined;
     await Promise.all([
       fetchTicketTotals(undefined, raffleIds),
       fetchCompletedRaffleIds(raffleIds),
     ]);
   }, [
     role,
+    isSuperAdmin,
     organizationId,
     refreshOrgState,
     fetchForms,
@@ -134,11 +195,44 @@ export default function AdminDashboardScreen() {
     fetchCompletedRaffleIds,
   ]);
 
-  // Load data from DB on screen focus
+  const refreshTicketTotals = useCallback(async () => {
+    if (role === null) return;
+    if (isSuperAdmin) {
+      const raffleIds = useRaffleStore.getState().forms.map((f) => f.id);
+      await fetchTicketTotals(
+        undefined,
+        raffleIds.length > 0 ? raffleIds : undefined,
+      );
+      return;
+    }
+    if (role === 'org_admin' && !organizationId) return;
+
+    const { forms: loadedForms } = useRaffleStore.getState();
+    const raffleIds =
+      role === 'org_admin' ? loadedForms.map((f) => f.id) : undefined;
+    await fetchTicketTotals(undefined, raffleIds);
+  }, [role, isSuperAdmin, organizationId, fetchTicketTotals]);
+
+  // Full reload on focus; live pot / ticket counts via Supabase realtime
   useFocusEffect(
     useCallback(() => {
       void loadData();
-    }, [loadData]),
+
+      const unsubscribe = subscribePaidTicketChanges(() => {
+        void refreshTicketTotals();
+      });
+
+      const appStateSub = AppState.addEventListener('change', (next) => {
+        if (next === 'active') {
+          void loadData();
+        }
+      });
+
+      return () => {
+        unsubscribe();
+        appStateSub.remove();
+      };
+    }, [loadData, refreshTicketTotals]),
   );
 
   const openTapToPaySettings = () => {
@@ -174,7 +268,49 @@ export default function AdminDashboardScreen() {
     });
   };
 
+  const confirmDeleteRaffle = async () => {
+    if (!deleteTarget) return;
+    const { id, title } = deleteTarget;
+    setDeleteTarget(null);
+    setIsDeleting(true);
+    try {
+      await deleteForm(id);
+      if (expandedRaffleId === id) setExpandedRaffleId(null);
+      Alert.alert('Deleted', `"${title || 'Untitled Raffle'}" was deleted.`);
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Failed to delete raffle');
+    } finally {
+      setIsDeleting(false);
+    }
+  };
+
+  const toggleLocationCheck = async (form: {
+    id: string;
+    locationCheckEnabled?: boolean | null;
+  }) => {
+    if (togglingLocationId) return;
+    const next = !(form.locationCheckEnabled !== false);
+    setTogglingLocationId(form.id);
+    try {
+      await updateForm({ id: form.id, locationCheckEnabled: next });
+    } catch (err: any) {
+      Alert.alert(
+        'Error',
+        err.message || 'Could not update location check',
+      );
+    } finally {
+      setTogglingLocationId(null);
+    }
+  };
+
   const handleConnectStripe = async () => {
+    if (!canConnectStripe) {
+      Alert.alert(
+        'Approval required',
+        'Stripe Connect is available after a super admin approves your organization.',
+      );
+      return;
+    }
     setIsConnectingStripe(true);
     try {
       const onboardingUrl = await connectStripe();
@@ -207,9 +343,11 @@ export default function AdminDashboardScreen() {
     return ticketTotals.find((t) => t.donation_formId === raffleId);
   };
 
-  const isCompleted = (raffleId: string): boolean => {
-    return completedRaffleIds.includes(raffleId);
-  };
+  const STATUS_TABS: { value: 'all' | 'active' | 'completed'; label: string }[] = [
+    { value: 'all', label: 'All' },
+    { value: 'active', label: 'Active' },
+    { value: 'completed', label: 'Completed' },
+  ];
 
   if (isLoading && !isRefreshing && forms.length === 0) {
     return <LoadingScreen message="Loading dashboard..." />;
@@ -217,50 +355,6 @@ export default function AdminDashboardScreen() {
 
   return (
     <View style={styles.container}>
-      <View style={styles.navTabs}>
-        {isSuperAdmin ? (
-          <TouchableOpacity
-            style={styles.navTab}
-            activeOpacity={0.7}
-            onPress={() => navigation.navigate('ManageOrganizations')}
-          >
-            <View style={styles.navTabIconWrap}>
-              <Icon source="domain" size={22} color={COLORS.primary} />
-              {pendingOrgCount > 0 ? (
-                <View style={styles.navBadge}>
-                  <Text style={styles.navBadgeText}>
-                    {pendingOrgCount > 9 ? '9+' : pendingOrgCount}
-                  </Text>
-                </View>
-              ) : null}
-            </View>
-            <Text style={styles.navTabLabel} numberOfLines={1}>
-              Organizations
-            </Text>
-          </TouchableOpacity>
-        ) : null}
-        <TouchableOpacity
-          style={styles.navTab}
-          activeOpacity={0.7}
-          onPress={() => navigation.navigate('AdminTickets')}
-        >
-          <Icon source="ticket-confirmation-outline" size={22} color={COLORS.primary} />
-          <Text style={styles.navTabLabel} numberOfLines={1}>
-            Tickets
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={styles.navTab}
-          activeOpacity={0.7}
-          onPress={() => navigation.navigate('AdminWinners')}
-        >
-          <Icon source="trophy-outline" size={22} color={COLORS.primary} />
-          <Text style={styles.navTabLabel} numberOfLines={1}>
-            Winners
-          </Text>
-        </TouchableOpacity>
-      </View>
-
       {isOrgAdmin && (
         <View style={styles.stripeBar}>
           {orgStripeConnected ? (
@@ -273,19 +367,22 @@ export default function AdminDashboardScreen() {
                 mode="contained"
                 onPress={handleConnectStripe}
                 loading={isConnectingStripe}
-                disabled={isConnectingStripe}
+                disabled={isConnectingStripe || !canConnectStripe}
                 icon="link-variant"
                 compact
-                style={styles.stripeConnectButton}
+                style={[
+                  styles.stripeConnectButton,
+                  !canConnectStripe && styles.stripeConnectButtonDisabled,
+                ]}
                 buttonColor={COLORS.primary}
               >
-                Connect Stripe
+                {orgStripeAccountId ? 'Continue Stripe setup' : 'Connect Stripe'}
               </Button>
               <Button
                 mode="outlined"
                 onPress={handleRefreshStripe}
                 loading={isRefreshingStripe}
-                disabled={isRefreshingStripe}
+                disabled={isRefreshingStripe || !canConnectStripe}
                 icon="refresh"
                 compact
                 style={styles.stripeRefreshButton}
@@ -304,26 +401,6 @@ export default function AdminDashboardScreen() {
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
         }
       >
-        {/* Filter — matches web's title filter */}
-        <TextInput
-          mode="outlined"
-          placeholder="Filter..."
-          value={filterText}
-          onChangeText={setFilterText}
-          style={styles.filterInput}
-          outlineColor={COLORS.border}
-          activeOutlineColor={COLORS.primary}
-          textColor={COLORS.foreground}
-          placeholderTextColor={COLORS.textLight}
-          dense
-          left={<TextInput.Icon icon="magnify" color={COLORS.textLight} />}
-          right={
-            filterText ? (
-              <TextInput.Icon icon="close" onPress={() => setFilterText('')} color={COLORS.textLight} />
-            ) : undefined
-          }
-        />
-
         {isOrgAdmin && organizationName && (
           <Text style={styles.orgBanner}>
             {organizationName}
@@ -366,8 +443,8 @@ export default function AdminDashboardScreen() {
             <Card style={styles.tapToPayCard}>
               <Card.Content style={styles.tapToPayCardContent}>
                 <View style={styles.tapToPayCardLeft}>
-                  <View style={styles.tapToPayIcon}>
-                    <TapToPayIcon size={28} color={COLORS.primary} filled />
+                  <View style={styles.tapToPayIconWrap}>
+                    <TapToPayIcon size={26} color={COLORS.primary} filled />
                   </View>
                   <View style={styles.tapToPayTextWrap}>
                     <Text style={styles.tapToPayTitle}>Tap to Pay on iPhone</Text>
@@ -376,24 +453,66 @@ export default function AdminDashboardScreen() {
                     </Text>
                   </View>
                 </View>
-                <IconButton
-                  icon="chevron-right"
-                  iconColor={COLORS.textLight}
-                  size={24}
+                <Icon
+                  source="chevron-right"
+                  size={26}
+                  color={COLORS.white}
                 />
               </Card.Content>
             </Card>
           </TouchableOpacity>
         )}
 
+        <TextInput
+          mode="outlined"
+          placeholder="Search..."
+          value={filterText}
+          onChangeText={setFilterText}
+          style={styles.filterInput}
+          outlineColor={COLORS.border}
+          activeOutlineColor={COLORS.primary}
+          textColor={COLORS.foreground}
+          placeholderTextColor={COLORS.textLight}
+          dense
+          left={<TextInput.Icon icon="magnify" color={COLORS.textLight} />}
+          right={
+            filterText ? (
+              <TextInput.Icon icon="close" onPress={() => setFilterText('')} color={COLORS.textLight} />
+            ) : undefined
+          }
+        />
+
+        <View style={styles.statusTabs}>
+          {STATUS_TABS.map((option) => {
+            const selected = statusFilter === option.value;
+            return (
+              <TouchableOpacity
+                key={option.value}
+                style={[styles.statusTab, selected && styles.statusTabSelected]}
+                activeOpacity={0.75}
+                onPress={() => setStatusFilter(option.value)}
+              >
+                <Text
+                  style={[
+                    styles.statusTabLabel,
+                    selected && styles.statusTabLabelSelected,
+                  ]}
+                >
+                  {option.label}
+                </Text>
+              </TouchableOpacity>
+            );
+          })}
+        </View>
+
         <Text style={styles.sectionTitle}>
-          {isOrgAdmin ? 'My Raffles' : 'All Raffles'} ({filteredForms.length})
+          {isOrgAdmin ? 'My Raffles' : 'All Raffles'}
         </Text>
 
         {storeError && (
           <Card style={styles.errorCard}>
             <Card.Content>
-              <Text style={styles.errorTitle}>⚠️ Failed to load data</Text>
+              <Text style={styles.errorTitle}>Failed to load data</Text>
               <Text style={styles.errorText}>{storeError}</Text>
               <Text style={styles.errorHint}>
                 This is likely a Supabase RLS issue. Make sure Row Level Security policies are configured to allow the anon role to read data.
@@ -413,7 +532,15 @@ export default function AdminDashboardScreen() {
 
         {filteredForms.length === 0 && !isLoading && !storeError && (
           <View style={styles.emptyState}>
-            <Text style={styles.emptyText}>No raffles yet. Create your first raffle!</Text>
+            <Text style={styles.emptyText}>
+              {statusFilter === 'active'
+                ? 'No active raffles.'
+                : statusFilter === 'completed'
+                  ? 'No completed raffles.'
+                  : filterText.trim()
+                    ? 'No raffles match your search.'
+                    : 'No raffles yet. Create your first raffle!'}
+            </Text>
           </View>
         )}
 
@@ -421,42 +548,108 @@ export default function AdminDashboardScreen() {
           const total = getTicketTotal(form.id);
           const completed = isCompleted(form.id);
           const hasStripe = !!(form.stripeAccount as any)?.id;
+          const paymentReady = isTapToPayPaymentReady(
+            role,
+            orgStripeConnected,
+            orgStripeAccountId,
+            organizationId,
+            form.stripeAccount,
+          );
+          // Org admins sell via org Stripe (same as workers); don't require raffle.stripeAccount.
+          const canSellTickets =
+            showTapToPayFeatures && !completed && (paymentReady || hasStripe);
+          const expanded = expandedRaffleId === form.id;
+          const locationOn = form.locationCheckEnabled !== false;
+          const locationBusy = togglingLocationId === form.id;
+          const locationLabel = form.raffleLocation?.trim() || 'No location';
+
+          const openSellTickets = () => {
+            if (
+              !canUseInPersonPayment(
+                isAdmin,
+                role,
+                orgStripeConnected,
+                orgStripeAccountId,
+                organizationId,
+                form.stripeAccount,
+              )
+            ) {
+              if (usesOrganizationStripe(role, organizationId) && !orgStripeConnected) {
+                showOrgStripeRequiredAlert(undefined, role);
+              } else if (!hasStripe && !paymentReady) {
+                showRaffleStripeRequiredAlert();
+              } else {
+                showTapToPayAdminRequiredAlert();
+              }
+              return;
+            }
+            navigation.navigate('InPersonPayment', { id: form.id });
+          };
 
           return (
-            <Card key={form.id} style={styles.raffleCard}>
+            <Card key={form.id} style={styles.raffleCard} mode="elevated">
               <TouchableOpacity
-                onPress={() => navigation.navigate('PreviewRaffle', { id: form.id })}
-                activeOpacity={0.7}
+                onPress={() =>
+                  setExpandedRaffleId((current) =>
+                    current === form.id ? null : form.id,
+                  )
+                }
+                activeOpacity={0.75}
+                style={styles.cardHeaderPress}
               >
-                <Card.Content>
-                  {/* Title + Status */}
-                  <View style={styles.cardHeader}>
-                    <Text style={styles.raffleTitle} numberOfLines={2}>
-                      {form.title || 'Untitled Raffle'}
-                    </Text>
-                    {completed ? (
-                      <Chip icon="check" style={styles.completedChip} textStyle={styles.completedText}>
-                        Completed
-                      </Chip>
-                    ) : (
-                      <Chip icon="clock" style={styles.activeChip} textStyle={styles.activeText}>
-                        Active
-                      </Chip>
-                    )}
-                  </View>
-
-                  {/* Raffle ID */}
-                  <Text style={styles.raffleId} numberOfLines={1} selectable>
-                    ID: {form.id}
+                <View style={styles.cardTopRow}>
+                  <Text style={styles.raffleTitle} numberOfLines={1}>
+                    {form.title || 'Untitled Raffle'}
                   </Text>
+                  {completed ? (
+                    <Chip
+                      icon="check-circle"
+                      style={styles.completedChip}
+                      textStyle={styles.completedText}
+                      compact
+                    >
+                      Completed
+                    </Chip>
+                  ) : (
+                    <Chip
+                      icon="clock-outline"
+                      style={styles.activeChip}
+                      textStyle={styles.activeText}
+                      compact
+                    >
+                      Active
+                    </Chip>
+                  )}
+                </View>
+                <View style={styles.cardBottomRow}>
+                  <View style={styles.collapsedMeta}>
+                    <Icon
+                      source="map-marker"
+                      size={14}
+                      color={COLORS.primary}
+                    />
+                    <Text style={styles.collapsedMetaText} numberOfLines={1}>
+                      {locationLabel}
+                    </Text>
+                  </View>
+                  <Icon
+                    source={expanded ? 'chevron-up' : 'chevron-down'}
+                    size={22}
+                    color={COLORS.textSecondary}
+                  />
+                </View>
+              </TouchableOpacity>
 
+              {expanded ? (
+                <View style={styles.cardBody}>
                   {isSuperAdmin ? (
                     <Text
                       style={[
-                        styles.raffleOrgLabel,
+                        styles.metaSecondary,
                         form.organization_approval_status === 'terminated' &&
                           styles.raffleOrgLabelTerminated,
                       ]}
+                      numberOfLines={1}
                     >
                       {formatOrganizationLabel(
                         form.organization_name,
@@ -464,99 +657,123 @@ export default function AdminDashboardScreen() {
                       )}
                     </Text>
                   ) : null}
+                  <Text style={styles.metaId} numberOfLines={1} selectable>
+                    {form.id}
+                  </Text>
 
-                  <Divider style={styles.divider} />
-
-                  {/* Total Amount + Tickets Sold + Actions */}
-                  <View style={styles.statsRow}>
-                    <View style={styles.stat}>
-                      <Text style={styles.statLabel}>Total Amount</Text>
-                      <Text style={styles.statValue}>
+                  <View style={styles.metricsRow}>
+                    <View style={styles.metricTile}>
+                      <Text style={styles.metricLabel}>Total Amount</Text>
+                      <Text style={styles.metricValue} numberOfLines={1}>
                         {formatCurrency(total?._sum.amount || 0)}
                       </Text>
                     </View>
-                    <View style={styles.stat}>
-                      <Text style={styles.statLabel}>Tickets Sold</Text>
-                      <Text style={styles.statValue}>
-                        {total?._sum.quantity || 0}
+                    <View style={styles.metricDivider} />
+                    <View style={styles.metricTile}>
+                      <Text style={styles.metricLabel}>Tickets Sold</Text>
+                      <Text style={styles.metricValue} numberOfLines={1}>
+                        {formatNumber(total?._sum.quantity || 0)}
                       </Text>
                     </View>
-                    <View style={styles.statsActions}>
-                      <IconButton
-                        icon="pencil"
-                        iconColor={COLORS.primary}
-                        size={20}
-                        onPress={() => navigation.navigate('EditRaffle', { id: form.id })}
-                        style={styles.iconAction}
-                      />
-                      <IconButton
-                        icon="eye"
-                        iconColor={COLORS.foreground}
-                        size={20}
-                        onPress={() => navigation.navigate('PreviewRaffle', { id: form.id })}
-                        style={styles.iconAction}
-                      />
-                      <DownloadTicketsCsvButton
-                        raffleId={form.id}
-                        raffleTitle={form.title}
-                        variant="icon"
-                      />
-                      <IconButton
-                        icon="account-group"
-                        iconColor={COLORS.primary}
-                        size={20}
-                        onPress={() =>
-                          navigation.navigate('ManageWorkers', {
-                            raffleId: form.id,
-                            organizationId: form.organization_id,
-                            raffleTitle: form.title,
-                            organizationName: form.organization_name,
-                          })
-                        }
-                        style={styles.iconAction}
-                      />
-                      {hasStripe && !completed ? (
-                        <IconButton
-                          icon="credit-card"
-                          iconColor={COLORS.primary}
-                          size={20}
-                          onPress={() => {
-                            if (
-                              !canUseInPersonPayment(
-                                isAdmin,
-                                role,
-                                orgStripeConnected,
-                                orgStripeAccountId,
-                                organizationId,
-                              )
-                            ) {
-                              if (
-                                usesOrganizationStripe(role, organizationId)
-                                && !orgStripeConnected
-                              ) {
-                                showOrgStripeRequiredAlert(undefined, role);
-                              } else {
-                                showTapToPayAdminRequiredAlert();
-                              }
-                              return;
-                            }
-                            navigation.navigate('InPersonPayment', { id: form.id });
-                          }}
-                          style={styles.iconAction}
-                        />
-                      ) : hasStripe && completed ? (
-                        <IconButton
-                          icon="credit-card"
-                          iconColor={COLORS.disabled}
-                          size={20}
-                          disabled
-                          style={styles.iconAction}
-                        />
-                      ) : null}
-                    </View>
                   </View>
-                </Card.Content>
-              </TouchableOpacity>
+
+                  <Button
+                    mode="contained"
+                    icon="ticket-confirmation-outline"
+                    onPress={() =>
+                      navigation.navigate('PreviewRaffle', { id: form.id })
+                    }
+                    buttonColor={COLORS.primary}
+                    style={styles.sellTicketsButton}
+                    contentStyle={styles.sellTicketsButtonContent}
+                  >
+                    Manual entry
+                  </Button>
+
+                  <View style={styles.actionsBar}>
+                    <IconButton
+                      icon="map-marker-outline"
+                      iconColor={
+                        completed
+                          ? COLORS.disabled
+                          : locationOn
+                            ? COLORS.success
+                            : COLORS.error
+                      }
+                      size={20}
+                      disabled={completed || locationBusy}
+                      onPress={() => void toggleLocationCheck(form)}
+                      style={styles.actionBtn}
+                      accessibilityLabel={
+                        locationOn
+                          ? 'Disable location check'
+                          : 'Enable location check'
+                      }
+                    />
+                    <IconButton
+                      icon="eye-outline"
+                      iconColor={COLORS.primary}
+                      size={20}
+                      onPress={() =>
+                        navigation.navigate('PreviewRaffle', { id: form.id })
+                      }
+                      style={styles.actionBtn}
+                      accessibilityLabel="Preview raffle"
+                    />
+                    <IconButton
+                      icon="pencil-outline"
+                      iconColor={COLORS.primary}
+                      size={20}
+                      onPress={() =>
+                        navigation.navigate('EditRaffle', { id: form.id })
+                      }
+                      style={styles.actionBtn}
+                    />
+                    <DownloadTicketsCsvButton
+                      raffleId={form.id}
+                      raffleTitle={form.title}
+                      variant="icon"
+                    />
+                    <IconButton
+                      icon="account-group-outline"
+                      iconColor={COLORS.primary}
+                      size={20}
+                      onPress={() =>
+                        navigation.navigate('ManageWorkers', {
+                          raffleId: form.id,
+                          organizationId: form.organization_id,
+                          raffleTitle: form.title,
+                          organizationName: form.organization_name,
+                        })
+                      }
+                      style={styles.actionBtn}
+                    />
+                    {canSellTickets ? (
+                      <IconButton
+                        icon="credit-card-outline"
+                        iconColor={COLORS.primary}
+                        size={20}
+                        onPress={openSellTickets}
+                        style={styles.actionBtn}
+                        accessibilityLabel="Sell tickets"
+                      />
+                    ) : null}
+                    <IconButton
+                      icon="trash-can-outline"
+                      iconColor={COLORS.error}
+                      size={20}
+                      disabled={isDeleting}
+                      onPress={() =>
+                        setDeleteTarget({
+                          id: form.id,
+                          title: form.title || 'Untitled Raffle',
+                        })
+                      }
+                      style={styles.actionBtn}
+                    />
+                  </View>
+                </View>
+              ) : null}
             </Card>
           );
         })}
@@ -571,6 +788,34 @@ export default function AdminDashboardScreen() {
         />
       ) : null}
 
+      <Portal>
+        <Dialog
+          visible={!!deleteTarget}
+          onDismiss={() => setDeleteTarget(null)}
+        >
+          <Dialog.Title>Delete raffle?</Dialog.Title>
+          <Dialog.Content>
+            <Paragraph>
+              {deleteTarget
+                ? `Delete "${deleteTarget.title}"? This removes the raffle and its tickets. This cannot be undone.`
+                : ''}
+            </Paragraph>
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button onPress={() => setDeleteTarget(null)}>Cancel</Button>
+            <Button
+              textColor={COLORS.error}
+              loading={isDeleting}
+              disabled={isDeleting}
+              onPress={() => {
+                void confirmDeleteRaffle();
+              }}
+            >
+              Delete
+            </Button>
+          </Dialog.Actions>
+        </Dialog>
+      </Portal>
     </View>
   );
 }
@@ -583,49 +828,7 @@ const styles = StyleSheet.create({
   flex: { flex: 1 },
   content: {
     padding: 16,
-    paddingBottom: 80,
-  },
-  navTabs: {
-    flexDirection: 'row',
-    backgroundColor: COLORS.surface,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
-    paddingHorizontal: 8,
-    paddingVertical: 10,
-  },
-  navTab: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-    paddingVertical: 6,
-    paddingHorizontal: 4,
-  },
-  navTabIconWrap: {
-    position: 'relative',
-  },
-  navTabLabel: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: COLORS.foreground,
-    textAlign: 'center',
-  },
-  navBadge: {
-    position: 'absolute',
-    top: -4,
-    right: -10,
-    minWidth: 16,
-    height: 16,
-    borderRadius: 8,
-    backgroundColor: COLORS.error,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingHorizontal: 4,
-  },
-  navBadgeText: {
-    color: COLORS.white,
-    fontSize: 10,
-    fontWeight: '700',
+    paddingBottom: 110,
   },
   stripeBar: {
     flexDirection: 'row',
@@ -648,14 +851,47 @@ const styles = StyleSheet.create({
     flex: 1,
     borderRadius: 8,
   },
+  stripeConnectButtonDisabled: {
+    opacity: 0.45,
+  },
   stripeRefreshButton: {
     borderColor: COLORS.border,
     borderRadius: 8,
   },
   filterInput: {
     backgroundColor: COLORS.white,
-    marginBottom: 14,
+    marginBottom: 10,
     fontSize: 14,
+  },
+  statusTabs: {
+    flexDirection: 'row',
+    gap: 8,
+    marginBottom: 14,
+  },
+  statusTab: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    minHeight: 40,
+    paddingVertical: 10,
+    paddingHorizontal: 4,
+    borderRadius: 10,
+    backgroundColor: COLORS.surface,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  statusTabSelected: {
+    backgroundColor: COLORS.primary,
+    borderColor: COLORS.primary,
+  },
+  statusTabLabel: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: COLORS.textSecondary,
+    textAlign: 'center',
+  },
+  statusTabLabelSelected: {
+    color: COLORS.white,
   },
   orgBanner: {
     fontSize: 14,
@@ -703,35 +939,48 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   tapToPayCard: {
-    backgroundColor: COLORS.surface,
-    borderRadius: 12,
+    backgroundColor: COLORS.primary,
+    borderRadius: 14,
     marginBottom: 16,
-    borderWidth: 1.5,
-    borderColor: COLORS.primary,
-    elevation: 2,
+    borderWidth: 0,
+    elevation: 6,
+    shadowColor: COLORS.primaryDark,
+    shadowOpacity: 0.35,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
   },
   tapToPayCardContent: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingVertical: 4,
+    paddingVertical: 6,
+    paddingRight: 0,
   },
   tapToPayCardLeft: {
     flexDirection: 'row',
     alignItems: 'center',
     flex: 1,
+    gap: 12,
   },
-  tapToPayIcon: { margin: 0 },
+  tapToPayIconWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: COLORS.white,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
   tapToPayTextWrap: { flex: 1 },
   tapToPayTitle: {
     fontSize: 16,
     fontWeight: '700',
-    color: COLORS.foreground,
+    color: COLORS.white,
   },
   tapToPayDesc: {
     fontSize: 12,
-    color: COLORS.textSecondary,
-    marginTop: 2,
+    color: 'rgba(255,255,255,0.88)',
+    marginTop: 3,
+    lineHeight: 16,
   },
   emptyState: {
     padding: 40,
@@ -744,86 +993,147 @@ const styles = StyleSheet.create({
   },
   raffleCard: {
     backgroundColor: COLORS.surface,
-    borderRadius: 12,
-    marginBottom: 20,
-    elevation: 2,
-    paddingTop: 8,
-    paddingBottom: 12,
+    borderRadius: 16,
+    marginBottom: 12,
+    elevation: 1,
+    shadowColor: '#0F172A',
+    shadowOpacity: 0.06,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 2 },
+    overflow: 'hidden',
   },
-  cardHeader: {
+  cardHeaderPress: {
+    paddingHorizontal: 14,
+    paddingTop: 14,
+    paddingBottom: 12,
+    gap: 10,
+  },
+  cardTopRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
+    gap: 10,
+  },
+  cardBottomRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
   },
   raffleTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: COLORS.foreground,
     flex: 1,
-    marginRight: 8,
+    minWidth: 0,
+    fontSize: 16,
+    fontWeight: '700',
+    color: COLORS.foreground,
+    letterSpacing: -0.2,
   },
-  raffleId: {
-    fontSize: 12,
-    color: COLORS.textLight,
-    fontFamily: 'monospace',
-    marginTop: 4,
+  collapsedMeta: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    minWidth: 0,
   },
-  raffleOrgLabel: {
+  collapsedMetaText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '500',
+    color: COLORS.textSecondary,
+  },
+  cardBody: {
+    paddingHorizontal: 14,
+    paddingBottom: 12,
+    gap: 12,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: COLORS.border,
+    paddingTop: 12,
+  },
+  metaSecondary: {
     fontSize: 12,
     color: COLORS.textSecondary,
-    marginTop: 4,
-    fontWeight: '500',
+  },
+  metaId: {
+    fontSize: 11,
+    color: COLORS.textLight,
+    fontFamily: Platform.OS === 'ios' ? 'Menlo' : 'monospace',
   },
   raffleOrgLabelTerminated: {
     color: '#6B7280',
     fontStyle: 'italic',
   },
   completedChip: {
-    backgroundColor: '#e8f5e9',
+    backgroundColor: '#ECFDF5',
+    flexShrink: 0,
   },
   completedText: {
-    color: COLORS.success,
+    color: '#059669',
     fontSize: 11,
+    fontWeight: '600',
   },
   activeChip: {
-    backgroundColor: '#fff3e0',
+    backgroundColor: '#FFF7ED',
+    flexShrink: 0,
   },
   activeText: {
-    color: COLORS.warning,
+    color: '#EA580C',
     fontSize: 11,
+    fontWeight: '600',
   },
-  divider: {
-    marginVertical: 12,
-  },
-  statsRow: {
+  metricsRow: {
     flexDirection: 'row',
-    gap: 12,
+    alignItems: 'stretch',
+    backgroundColor: COLORS.surfaceMuted,
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 4,
   },
-  stat: {
+  metricTile: {
     flex: 1,
+    alignItems: 'center',
+    paddingHorizontal: 8,
   },
-  statLabel: {
-    fontSize: 12,
-    color: COLORS.textSecondary,
+  metricDivider: {
+    width: StyleSheet.hairlineWidth,
+    backgroundColor: COLORS.border,
+    marginVertical: 2,
   },
-  statValue: {
-    fontSize: 16,
-    fontWeight: 'bold',
+  metricLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: COLORS.textLight,
+    textTransform: 'uppercase',
+    letterSpacing: 0.4,
+    marginBottom: 4,
+  },
+  metricValue: {
+    fontSize: 18,
+    fontWeight: '700',
     color: COLORS.foreground,
-    marginTop: 2,
+    letterSpacing: -0.3,
   },
-  statsActions: {
+  sellTicketsButton: {
+    borderRadius: 10,
+    marginTop: 4,
+    marginBottom: 4,
+  },
+  sellTicketsButtonContent: {
+    paddingVertical: 4,
+  },
+  actionsBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'flex-end',
+    justifyContent: 'space-between',
+    backgroundColor: COLORS.surfaceMuted,
+    borderRadius: 12,
+    paddingHorizontal: 4,
+    paddingVertical: 2,
   },
-  iconAction: {
+  actionBtn: {
     margin: 0,
   },
   fab: {
     position: 'absolute',
     right: 16,
-    bottom: 16,
+    bottom: 96,
     backgroundColor: COLORS.primary,
   },
   errorCard: {

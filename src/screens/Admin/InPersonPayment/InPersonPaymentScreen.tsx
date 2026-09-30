@@ -5,6 +5,7 @@ import {
   ScrollView,
   Alert,
   KeyboardAvoidingView,
+  Keyboard,
   Platform,
 } from 'react-native';
 import {
@@ -30,11 +31,12 @@ import {
   showOrgStripeRequiredAlert,
   usesOrganizationStripe,
 } from '../../../utils/tapToPayAccess';
-import { COLORS, TICKET_TIERS } from '../../../constants';
+import { COLORS, TICKET_TIERS, CUSTOM_TICKET_DOLLARS_MIN, customTicketQuantityFromDollars } from '../../../constants';
 import { RootStackParamList, DonationForm } from '../../../types';
 import { raffleApi, ticketApi } from '../../../services/api/raffleApi';
 import { stripeApi } from '../../../services/api/stripeApi';
-import { formatCurrency, getPublicIp } from '../../../utils';
+import { useRaffleStore } from '../../../store/raffleStore';
+import { formatCurrency, formatNumber, getPublicIp, getTicketReferenceId, getOrgLogoUrl } from '../../../utils';
 import LoadingScreen from '../../../components/LoadingScreen';
 import ErrorScreen from '../../../components/ErrorScreen';
 import { useStripeReader } from '../../../hooks/useStripeReader';
@@ -117,14 +119,18 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
     orgStripeAccountId,
   } = useAuthStore();
 
-  const stripeAccountId = (raffle.stripeAccount as any)?.id as string | undefined;
-  const merchantDisplayName = raffle.title?.trim() || 'Raffle';
-  useStripeTerminalAccountScope(stripeAccountId);
-
   const tapToPayOrgId = resolveTapToPayOrganizationId(
     raffle.organization_id,
     organizationId,
   );
+  const isOrgScoped = usesOrganizationStripe(role, tapToPayOrgId);
+  // Org raffles often have no per-raffle Stripe — charge on the org connected account.
+  const stripeAccountId =
+    ((raffle.stripeAccount as any)?.id as string | undefined) ??
+    (isOrgScoped ? orgStripeAccountId ?? undefined : undefined);
+  const merchantDisplayName = raffle.title?.trim() || 'Raffle';
+  useStripeTerminalAccountScope(stripeAccountId);
+
   const orgStripeReady = isTapToPayPaymentReady(
     role,
     orgStripeConnected,
@@ -132,7 +138,6 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
     tapToPayOrgId,
     raffle.stripeAccount,
   );
-  const isOrgScoped = usesOrganizationStripe(role, tapToPayOrgId);
 
   useEffect(() => {
     if (isOrgScoped && !orgStripeReady) {
@@ -192,7 +197,63 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
 
   // Ticket selection
   const [selectedTier, setSelectedTier] = useState<{ price: number; quantity: number } | null>(null);
+  const [customAmountText, setCustomAmountText] = useState('');
+  const [customAmountError, setCustomAmountError] = useState('');
+  const [customAmountActive, setCustomAmountActive] = useState(false);
+  const [customAmountBlurToken, setCustomAmountBlurToken] = useState(0);
   const [platformFee, setPlatformFee] = useState(true);
+  const customAmountInputRef = useRef<any>(null);
+
+  const isCustomAmountSelected =
+    customAmountActive ||
+    (!!selectedTier &&
+      !TICKET_TIERS.some(
+        (t) => t.price === selectedTier.price && t.quantity === selectedTier.quantity,
+      ));
+
+  const selectPresetTier = (price: number, quantity: number) => {
+    Keyboard.dismiss();
+    customAmountInputRef.current?.blur?.();
+    setCustomAmountText('');
+    setCustomAmountError('');
+    setCustomAmountActive(false);
+    setCustomAmountBlurToken((n) => n + 1);
+    setSelectedTier({ price, quantity });
+  };
+
+  const beginCustomAmount = () => {
+    setCustomAmountActive(true);
+    setSelectedTier(null);
+    setCustomAmountError('');
+  };
+
+  const applyCustomAmount = (raw: string) => {
+    // Digits only — whole dollars
+    const cleaned = raw.replace(/[^0-9]/g, '');
+    setCustomAmountText(cleaned);
+    setCustomAmountActive(true);
+
+    if (!cleaned) {
+      setCustomAmountError('');
+      setSelectedTier(null);
+      return;
+    }
+
+    const dollars = Number(cleaned);
+    if (!Number.isFinite(dollars) || dollars <= CUSTOM_TICKET_DOLLARS_MIN) {
+      setCustomAmountError(
+        `Enter more than $${CUSTOM_TICKET_DOLLARS_MIN}. For $${CUSTOM_TICKET_DOLLARS_MIN} or less, choose a package above.`,
+      );
+      setSelectedTier(null);
+      return;
+    }
+
+    setCustomAmountError('');
+    setSelectedTier({
+      price: dollars,
+      quantity: customTicketQuantityFromDollars(dollars),
+    });
+  };
 
   // Flow step
   const [currentStep, setCurrentStep] = useState<Step>('tickets');
@@ -202,6 +263,9 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
   const [buyerEmail, setBuyerEmail] = useState('');
   const [buyerPhone, setBuyerPhone] = useState('');
   const [buyerAddress, setBuyerAddress] = useState('');
+  const emailRef = useRef<any>(null);
+  const phoneRef = useRef<any>(null);
+  const addressRef = useRef<any>(null);
 
   // Snackbar
   const [snackMessage, setSnackMessage] = useState('');
@@ -300,10 +364,16 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
         stripeSession: { paymentIntentId: result.paymentIntentId },
       });
 
+      // Keep admin/worker dashboard pot + ticket counts fresh without re-signin
+      void useRaffleStore.getState().fetchTicketTotals(id);
+
       stripeApi.sendPurchaseEmail({
         email: buyerEmail,
         quantity: selectedTier.quantity,
-        ticketNumber: ticketId,
+        ticketNumber: getTicketReferenceId(ticketId),
+        raffleId: id,
+        ticketId,
+        organizationLogoUrl: getOrgLogoUrl(raffle.backgroundImage),
       }).catch((err) => console.warn('Confirmation email failed:', err.message));
 
       setSnackMessage(
@@ -327,7 +397,10 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
     await stripeApi.sendPurchaseEmail({
       email: buyerEmail.trim(),
       quantity: selectedTier.quantity,
-      ticketNumber,
+      ticketNumber: getTicketReferenceId(ticketNumber),
+      raffleId: id,
+      ticketId: ticketNumber,
+      organizationLogoUrl: getOrgLogoUrl(raffle.backgroundImage),
     });
   };
 
@@ -458,7 +531,10 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
               {/* Ticket tier grid */}
               <View style={styles.tierGrid}>
                 {TICKET_TIERS.map((tier) => {
-                  const isSelected = selectedTier?.price === tier.price;
+                  const isSelected =
+                    !isCustomAmountSelected &&
+                    selectedTier?.price === tier.price &&
+                    selectedTier?.quantity === tier.quantity;
                   return (
                     <View
                       key={tier.price}
@@ -469,18 +545,13 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
                     >
                       <Button
                         mode="text"
-                        onPress={() =>
-                          setSelectedTier({
-                            price: tier.price,
-                            quantity: tier.quantity,
-                          })
-                        }
+                        onPress={() => selectPresetTier(tier.price, tier.quantity)}
                         style={styles.tierButton}
                         contentStyle={styles.tierButtonContent}
                       >
                         <View style={styles.tierInner}>
                           <Text style={styles.tierQty}>
-                            Ticket(s): {tier.quantity}
+                            Ticket(s): {formatNumber(tier.quantity)}
                           </Text>
                           <View style={styles.tierSep} />
                           <Text style={styles.tierPrice}>
@@ -491,6 +562,53 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
                     </View>
                   );
                 })}
+              </View>
+
+              {/* Custom amount — 3 tickets / $1, must be greater than $250 */}
+              <View
+                style={[
+                  styles.customAmountCard,
+                  isCustomAmountSelected && styles.customAmountCardSelected,
+                ]}
+              >
+                <Text style={styles.customAmountTitle}>Or enter any amount</Text>
+                <Text style={styles.customAmountHint}>
+                  3 tickets for every $1
+                </Text>
+                <TextInput
+                  ref={customAmountInputRef}
+                  key={`custom-amount-${customAmountBlurToken}`}
+                  mode="outlined"
+                  label="Amount ($)"
+                  value={customAmountText}
+                  onChangeText={applyCustomAmount}
+                  onFocus={beginCustomAmount}
+                  keyboardType="number-pad"
+                  placeholder={`e.g. 1250`}
+                  style={styles.customAmountInput}
+                  outlineColor={
+                    customAmountError
+                      ? COLORS.error
+                      : isCustomAmountSelected
+                        ? COLORS.primary
+                        : COLORS.border
+                  }
+                  activeOutlineColor={
+                    customAmountError ? COLORS.error : COLORS.primary
+                  }
+                  textColor={COLORS.foreground}
+                  left={<TextInput.Affix text="$" />}
+                  error={!!customAmountError}
+                />
+                {customAmountError ? (
+                  <Text style={styles.customAmountError}>{customAmountError}</Text>
+                ) : null}
+                {isCustomAmountSelected && selectedTier ? (
+                  <Text style={styles.customAmountPreview}>
+                    {formatCurrency(selectedTier.price)} →{' '}
+                    {formatNumber(selectedTier.quantity)} tickets
+                  </Text>
+                ) : null}
               </View>
 
               {/* Platform fee checkbox */}
@@ -578,9 +696,13 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
                 style={styles.input}
                 outlineColor={COLORS.border}
                 activeOutlineColor={COLORS.primary}
+                returnKeyType="next"
+                blurOnSubmit={false}
+                onSubmitEditing={() => emailRef.current?.focus()}
               />
 
               <TextInput
+                ref={emailRef}
                 mode="outlined"
                 label="Email *"
                 value={buyerEmail}
@@ -591,31 +713,43 @@ function InPersonPaymentContent({ raffle }: { raffle: DonationForm }) {
                 style={styles.input}
                 outlineColor={COLORS.border}
                 activeOutlineColor={COLORS.primary}
+                returnKeyType="next"
+                blurOnSubmit={false}
+                onSubmitEditing={() => phoneRef.current?.focus()}
               />
 
               <TextInput
+                ref={phoneRef}
                 mode="outlined"
                 label="Phone Number *"
                 value={buyerPhone}
                 onChangeText={setBuyerPhone}
-                keyboardType="phone-pad"
+                // ponytail: default (not phone-pad) so Return/Next exists and advances to Address
+                keyboardType="default"
+                textContentType="telephoneNumber"
+                autoComplete="tel"
                 placeholder="+1 (555) 000-0000"
                 style={styles.input}
                 outlineColor={COLORS.border}
                 activeOutlineColor={COLORS.primary}
+                returnKeyType="next"
+                blurOnSubmit={false}
+                onSubmitEditing={() => addressRef.current?.focus()}
               />
 
               <TextInput
+                ref={addressRef}
                 mode="outlined"
                 label="Address *"
                 value={buyerAddress}
                 onChangeText={setBuyerAddress}
                 placeholder="H-XXX St-XXX Zip Code"
-                multiline
-                numberOfLines={3}
                 style={styles.input}
                 outlineColor={COLORS.border}
                 activeOutlineColor={COLORS.primary}
+                returnKeyType="done"
+                blurOnSubmit
+                onSubmitEditing={() => Keyboard.dismiss()}
               />
 
               <Button
@@ -709,8 +843,24 @@ const styles = StyleSheet.create({
 
   /* Tier grid */
   tierGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 8, marginBottom: 12 },
-  tierCard: { width: '31%', backgroundColor: COLORS.primary, borderRadius: 8, borderWidth: 2, borderColor: 'transparent', overflow: 'hidden' },
-  tierCardSelected: { borderColor: COLORS.foreground, transform: [{ scale: 1.03 }] },
+  tierCard: {
+    width: '31%',
+    backgroundColor: COLORS.primary,
+    borderRadius: 8,
+    borderWidth: 2,
+    borderColor: 'transparent',
+    overflow: 'hidden',
+  },
+  // Same golden selected state as Buy Tickets (TicketTierSelector)
+  tierCardSelected: {
+    backgroundColor: '#ff9900',
+    borderColor: '#ff9900',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 3,
+  },
   tierCardDisabled: { opacity: 0.45 },
   tierButton: { borderRadius: 0, margin: 0 },
   tierButtonContent: { paddingVertical: 6 },
@@ -718,6 +868,44 @@ const styles = StyleSheet.create({
   tierQty: { fontSize: 12, fontWeight: '600', color: COLORS.white, fontFamily: 'monospace' },
   tierSep: { height: 1, width: '100%', backgroundColor: 'rgba(255,255,255,0.3)', marginVertical: 4 },
   tierPrice: { fontSize: 15, fontWeight: '700', color: COLORS.white },
+
+  customAmountCard: {
+    borderWidth: 1.5,
+    borderColor: COLORS.border,
+    borderRadius: 10,
+    padding: 12,
+    marginBottom: 12,
+    backgroundColor: COLORS.surfaceMuted,
+  },
+  customAmountCardSelected: {
+    borderColor: COLORS.primary,
+    backgroundColor: 'rgba(70,151,175,0.08)',
+  },
+  customAmountTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: COLORS.foreground,
+  },
+  customAmountHint: {
+    fontSize: 12,
+    color: COLORS.textSecondary,
+    marginTop: 2,
+    marginBottom: 8,
+  },
+  customAmountInput: {
+    backgroundColor: COLORS.surface,
+  },
+  customAmountError: {
+    fontSize: 12,
+    color: COLORS.error,
+    marginTop: 6,
+  },
+  customAmountPreview: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: COLORS.primary,
+    marginTop: 8,
+  },
 
   /* Platform fee */
   feeRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 8 },

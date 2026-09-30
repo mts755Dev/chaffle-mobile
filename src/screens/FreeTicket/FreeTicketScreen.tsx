@@ -20,6 +20,8 @@ import { useLocation } from '../../hooks/useLocation';
 import { getPublicIp, parseAppDate } from '../../utils';
 import LoadingScreen from '../../components/LoadingScreen';
 import GeoRestrictedScreen from '../../components/GeoRestrictedScreen';
+import { useAuthStore } from '../../store/authStore';
+import { resetToAdminHome } from '../../navigation/resetToAdminHome';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
 type FreeTicketRouteProp = RouteProp<RootStackParamList, 'FreeTicket'>;
@@ -38,6 +40,18 @@ export default function FreeTicketScreen() {
   const route = useRoute<FreeTicketRouteProp>();
   const { raffleId } = route.params;
   const location = useLocation();
+  const { isAdmin, role } = useAuthStore();
+
+  const goHome = () => {
+    if (isAdmin && role) {
+      resetToAdminHome(navigation, role);
+      return;
+    }
+    navigation.reset({
+      index: 0,
+      routes: [{ name: 'AdminLogin' }],
+    });
+  };
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState('');
@@ -177,7 +191,7 @@ export default function FreeTicketScreen() {
         </Text>
         <Button
           mode="contained"
-          onPress={() => navigation.navigate('MainTabs')}
+          onPress={goHome}
           style={styles.backButton}
         >
           Back to Home

@@ -1,26 +1,24 @@
 import type { User } from "https://esm.sh/@supabase/supabase-js@2";
 
-/** Matches chaffle/lib/authRoles.ts isWebSuperAdmin */
+/**
+ * SECURITY: Platform super-admin is ONLY app_metadata.role.
+ * user_metadata.role is client-writable via auth.updateUser — never trust it.
+ */
 export function isSuperAdmin(user: User): boolean {
-  const role =
-    (user.user_metadata?.role as string | undefined) ??
-    (user.app_metadata?.role as string | undefined);
-  if (role === "admin" || role === "super_admin") return true;
-  if (role === "org_admin" || role === "worker") return false;
-
-  const organizationId =
-    (user.user_metadata?.organization_id as string | undefined) ??
-    (user.app_metadata?.organization_id as string | undefined);
-
-  if (user.user_metadata?.firstName && !organizationId) {
-    return true;
-  }
-
-  return user.role === "admin";
+  const role = user.app_metadata?.role as string | undefined;
+  return role === "admin" || role === "super_admin";
 }
 
 export function isOrgAdmin(user: User): boolean {
-  return user.user_metadata?.role === "org_admin";
+  if (isSuperAdmin(user)) return false;
+  const userRole = user.user_metadata?.role as string | undefined;
+  // Ignore forgeable platform-admin marks
+  if (userRole === "admin" || userRole === "super_admin") {
+    return (user.app_metadata?.role as string | undefined) === "org_admin";
+  }
+  const role =
+    userRole ?? (user.app_metadata?.role as string | undefined);
+  return role === "org_admin";
 }
 
 /** Manual draw: super admin and org admin (mobile drawAccess.ts parity). */

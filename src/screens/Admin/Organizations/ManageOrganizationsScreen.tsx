@@ -13,6 +13,9 @@ import {
   Card,
   Chip,
   Divider,
+  Dialog,
+  Portal,
+  Paragraph,
 } from 'react-native-paper';
 import { useFocusEffect } from '@react-navigation/native';
 import { COLORS } from '../../../constants';
@@ -25,10 +28,10 @@ import LoadingScreen from '../../../components/LoadingScreen';
 type FilterOption = OrganizationListFilter;
 
 const FILTER_OPTIONS: { value: FilterOption; label: string }[] = [
-  { value: 'pending', label: 'Pending' },
-  { value: 'approved', label: 'Approved' },
-  { value: 'rejected', label: 'Rejected' },
   { value: 'all', label: 'All' },
+  { value: 'approved', label: 'Approved' },
+  { value: 'pending', label: 'Pending' },
+  { value: 'rejected', label: 'Rejected' },
 ];
 
 function statusChipStyle(status: OrgApprovalStatus | undefined) {
@@ -46,7 +49,7 @@ function statusChipStyle(status: OrgApprovalStatus | undefined) {
 
 export default function ManageOrganizationsScreen() {
   const { user } = useAuthStore();
-  const [filter, setFilter] = useState<FilterOption>('pending');
+  const [filter, setFilter] = useState<FilterOption>('all');
   const [dataByFilter, setDataByFilter] = useState<
     Record<FilterOption, OrganizationRecord[]>
   >({
@@ -62,6 +65,8 @@ export default function ManageOrganizationsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [actingOnId, setActingOnId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] =
+    useState<OrganizationRecord | null>(null);
 
   const organizations = dataByFilter[filter];
   const filterLoaded = loadedFiltersRef.current.has(filter);
@@ -136,40 +141,35 @@ export default function ManageOrganizationsScreen() {
     );
   };
 
-  const handleTerminate = (org: OrganizationRecord) => {
-    Alert.alert(
-      'Terminate Organization',
-      `Remove "${org.name}" completely? This deletes all raffles, tickets, and workers, and frees the email so they can sign up again.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Terminate',
-          style: 'destructive',
-          onPress: async () => {
-            setActingOnId(org.id);
-            try {
-              await organizationApi.terminateOrganization(org.id);
-              await loadOrganizations();
-              Alert.alert(
-                'Terminated',
-                `"${org.name}" and all related data were removed. That email can sign up again.`,
-              );
-            } catch (err: any) {
-              Alert.alert('Error', err.message || 'Failed to terminate organization');
-            } finally {
-              setActingOnId(null);
-            }
-          },
-        },
-      ],
-    );
+  const handleDelete = (org: OrganizationRecord) => {
+    setDeleteTarget(org);
+  };
+
+  const confirmDelete = async () => {
+    const org = deleteTarget;
+    if (!org) return;
+
+    setDeleteTarget(null);
+    setActingOnId(org.id);
+    try {
+      await organizationApi.deleteOrganization(org.id);
+      await loadOrganizations();
+      Alert.alert(
+        'Deleted',
+        `"${org.name}" and all related data were removed. That email can sign up again.`,
+      );
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Failed to delete organization');
+    } finally {
+      setActingOnId(null);
+    }
   };
 
   const renderItem = ({ item }: { item: OrganizationRecord }) => {
     const status = item.approval_status ?? 'pending';
     const colors = statusChipStyle(status);
     const isPending = status === 'pending';
-    const isApproved = status === 'approved';
+    const canDelete = status === 'approved' || status === 'rejected';
     const isActing = actingOnId === item.id;
 
     return (
@@ -228,20 +228,20 @@ export default function ManageOrganizationsScreen() {
                 </Button>
               </View>
             </>
-          ) : isApproved ? (
+          ) : canDelete ? (
             <>
               <Divider style={styles.divider} />
               <Button
                 mode="outlined"
-                icon="delete-forever"
-                onPress={() => handleTerminate(item)}
+                icon="delete"
+                onPress={() => handleDelete(item)}
                 loading={isActing}
                 disabled={isActing}
-                style={styles.terminateButton}
+                style={styles.deleteButton}
                 textColor={COLORS.error}
                 compact
               >
-                Terminate Organization
+                Delete Organization
               </Button>
             </>
           ) : null}
@@ -316,6 +316,33 @@ export default function ManageOrganizationsScreen() {
           ) : null
         }
       />
+
+      <Portal>
+        <Dialog
+          visible={!!deleteTarget}
+          onDismiss={() => setDeleteTarget(null)}
+        >
+          <Dialog.Title>Delete organization?</Dialog.Title>
+          <Dialog.Content>
+            <Paragraph>
+              {deleteTarget
+                ? `Permanently delete "${deleteTarget.name}"? This removes all raffles, tickets, workers, and the org admin login. The email can sign up again. This cannot be undone.`
+                : ''}
+            </Paragraph>
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button onPress={() => setDeleteTarget(null)}>Cancel</Button>
+            <Button
+              textColor={COLORS.error}
+              onPress={() => {
+                void confirmDelete();
+              }}
+            >
+              Delete
+            </Button>
+          </Dialog.Actions>
+        </Dialog>
+      </Portal>
     </View>
   );
 }
@@ -407,7 +434,7 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     borderColor: COLORS.error,
   },
-  terminateButton: {
+  deleteButton: {
     borderRadius: 8,
     borderColor: COLORS.error,
   },

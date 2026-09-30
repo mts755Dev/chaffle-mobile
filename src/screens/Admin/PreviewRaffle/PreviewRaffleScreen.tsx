@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import {
   View,
   StyleSheet,
@@ -16,8 +16,11 @@ import {
   Icon,
   Surface,
   IconButton,
+  Dialog,
+  Portal,
+  Paragraph,
 } from 'react-native-paper';
-import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
+import { useNavigation, useRoute, RouteProp, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import QRCode from 'react-native-qrcode-svg';
 import { COLORS, API_BASE_URL } from '../../../constants';
@@ -29,11 +32,13 @@ import {
 } from '../../../types';
 import { drawApi } from '../../../services/api/drawApi';
 import { raffleApi, ticketApi } from '../../../services/api/raffleApi';
+import { subscribePaidTicketChanges } from '../../../services/ticketTotalsLive';
 import { useAuthStore } from '../../../store/authStore';
 import { blockWorkerFromForeignRaffle } from '../../../utils/workerAccess';
 import { canManualDrawRaffle } from '../../../utils/drawAccess';
 import {
   formatCurrency,
+  formatNumber,
   calculatePot,
   formatDate,
   parseAppDate,
@@ -69,6 +74,7 @@ export default function PreviewRaffleScreen() {
   const [isDrawing, setIsDrawing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showQR, setShowQR] = useState(false);
+  const [confirmDrawVisible, setConfirmDrawVisible] = useState(false);
 
   const refreshWinner = useCallback(async (raffleId: string) => {
     const winner = await ticketApi.getTicketWhere({
@@ -101,11 +107,11 @@ export default function PreviewRaffleScreen() {
       setDonationForm(form);
 
       const totals = await raffleApi.getTicketsAmountByRaffle(id);
-      if (totals.length > 0) setTicketTotal(totals[0]);
+      setTicketTotal(totals[0] ?? null);
 
-      // Auto-draw on load when due — mirrors web admin preview page
+      // Auto-draw on load only when Eastern draw time has passed
       try {
-        await drawApi.triggerAutoDrawIfDue(id);
+        await drawApi.triggerAutoDrawIfDue(id, form.draw_date);
       } catch {
         // Non-fatal: page still loads if auto-draw fails
       }
@@ -117,49 +123,55 @@ export default function PreviewRaffleScreen() {
     }
   }, [id, role, workerRaffleId, navigation, refreshWinner]);
 
-  useEffect(() => {
-    void loadRaffle();
-  }, [loadRaffle]);
+  const refreshTicketTotal = useCallback(async () => {
+    const totals = await raffleApi.getTicketsAmountByRaffle(id);
+    setTicketTotal(totals[0] ?? null);
+  }, [id]);
+
+  useFocusEffect(
+    useCallback(() => {
+      void loadRaffle();
+      const unsubscribe = subscribePaidTicketChanges(
+        () => {
+          void refreshTicketTotal();
+        },
+        { raffleId: id },
+      );
+      return unsubscribe;
+    }, [loadRaffle, refreshTicketTotal, id]),
+  );
 
   const handleCountdownComplete = useCallback(async () => {
     if (winnerTicket || autoDrawTriggered.current) return;
 
     autoDrawTriggered.current = true;
     try {
-      await drawApi.triggerAutoDrawIfDue(id);
+      await drawApi.triggerAutoDrawIfDue(id, donationForm?.draw_date);
       await refreshWinner(id);
     } catch {
       autoDrawTriggered.current = false;
     }
-  }, [id, refreshWinner, winnerTicket]);
+  }, [id, refreshWinner, winnerTicket, donationForm?.draw_date]);
 
   const handleDrawWinner = () => {
-    Alert.alert(
-      'Get a Winner',
-      'Are you sure you want to randomly select a winner? This action cannot be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Get a Winner',
-          style: 'destructive',
-          onPress: async () => {
-            setIsDrawing(true);
-            try {
-              const result = await drawApi.drawWinner(id);
-              setWinnerTicket(result.winnerTicket);
-              Alert.alert(
-                'Winner Selected!',
-                `Reference #${getTicketReferenceId(result.winnerTicket.id)} — ${result.winnerTicket.buyerEmail} (${result.totalEntries} entries, rolled ${result.randomValue})`
-              );
-            } catch (err: any) {
-              Alert.alert('Error', err.message || 'Failed to draw winner');
-            } finally {
-              setIsDrawing(false);
-            }
-          },
-        },
-      ],
-    );
+    setConfirmDrawVisible(true);
+  };
+
+  const confirmDrawWinner = async () => {
+    setConfirmDrawVisible(false);
+    setIsDrawing(true);
+    try {
+      const result = await drawApi.drawWinner(id);
+      setWinnerTicket(result.winnerTicket);
+      Alert.alert(
+        'Winner Selected!',
+        `Reference #${getTicketReferenceId(result.winnerTicket.id)} — ${result.winnerTicket.buyerEmail} (${result.totalEntries} entries, rolled ${result.randomValue})`,
+      );
+    } catch (err: any) {
+      Alert.alert('Error', err.message || 'Failed to draw winner');
+    } finally {
+      setIsDrawing(false);
+    }
   };
 
   const handleShare = async () => {
@@ -186,6 +198,8 @@ export default function PreviewRaffleScreen() {
   const potAmount = calculatePot(totalAmount);
   const drawDate = parseAppDate(donationForm.draw_date);
   const isExpired = drawDate ? drawDate.isBefore(new Date()) : false;
+  // Match Dashboard: Completed = a winner ticket exists (not draw-date alone).
+  const isCompleted = !!winnerTicket;
   const stripeAccountId = (donationForm.stripeAccount as any)?.id;
   const hasStripe = !!stripeAccountId;
   const showManualDrawButton = !winnerTicket && canManualDrawRaffle(role);
@@ -210,7 +224,7 @@ export default function PreviewRaffleScreen() {
                 <Icon source="ticket-confirmation-outline" size={14} color={COLORS.white} />
                 <Text style={styles.raffleBadgeText}>50 / 50 RAFFLE</Text>
               </View>
-              {isExpired ? (
+              {isCompleted ? (
                 <View style={[styles.statusPill, styles.statusCompleted]}>
                   <View style={[styles.statusDot, { backgroundColor: COLORS.success }]} />
                   <Text style={[styles.statusPillText, { color: COLORS.success }]}>Completed</Text>
@@ -258,7 +272,7 @@ export default function PreviewRaffleScreen() {
           <View style={styles.statDivider} />
           <View style={styles.statItem}>
             <Icon source="ticket-outline" size={18} color="rgba(255,255,255,0.7)" />
-            <Text style={styles.statValue}>{totalQty}</Text>
+            <Text style={styles.statValue}>{formatNumber(totalQty)}</Text>
             <Text style={styles.statLabel}>Tickets</Text>
           </View>
           <View style={styles.statDivider} />
@@ -346,27 +360,25 @@ export default function PreviewRaffleScreen() {
           </Surface>
         </View>
 
-        {/* ─── Buy Tickets (like web's PaymentDialog) ────────────── */}
-        {!winnerTicket && (
-          <View style={styles.section}>
-            <Button
-              mode="contained"
-              onPress={() =>
-                navigation.navigate('BuyTickets', {
-                  raffleId: id,
-                  donationForm,
-                })
-              }
-              style={styles.buyButton}
-              contentStyle={styles.winnerButtonContent}
-              buttonColor={COLORS.primary}
-              icon="ticket"
-              labelStyle={styles.winnerButtonLabel}
-            >
-              Buy Tickets
-            </Button>
-          </View>
-        )}
+        {/* ─── Buy Tickets — always available for staff sales ────────────── */}
+        <View style={styles.section}>
+          <Button
+            mode="contained"
+            onPress={() =>
+              navigation.navigate('BuyTickets', {
+                raffleId: id,
+                donationForm,
+              })
+            }
+            style={styles.buyButton}
+            contentStyle={styles.winnerButtonContent}
+            buttonColor={COLORS.primary}
+            icon="ticket"
+            labelStyle={styles.winnerButtonLabel}
+          >
+            Buy Tickets
+          </Button>
+        </View>
 
         {/* ─── Get a Winner (super admin + org admin) ─── */}
         {showManualDrawButton && (
@@ -430,7 +442,7 @@ export default function PreviewRaffleScreen() {
             </View>
             <View style={styles.detailRow}>
               <Text style={styles.detailLabel}>Status</Text>
-              {isExpired ? (
+              {isCompleted ? (
                 <Chip
                   icon="check-circle"
                   style={styles.chipCompleted}
@@ -561,6 +573,32 @@ export default function PreviewRaffleScreen() {
           onPress={handleShare}
         />
       </View>
+
+      <Portal>
+        <Dialog
+          visible={confirmDrawVisible}
+          onDismiss={() => setConfirmDrawVisible(false)}
+        >
+          <Dialog.Title>Get a Winner?</Dialog.Title>
+          <Dialog.Content>
+            <Paragraph>
+              Randomly select a winner for this raffle? This action cannot be
+              undone.
+            </Paragraph>
+          </Dialog.Content>
+          <Dialog.Actions>
+            <Button onPress={() => setConfirmDrawVisible(false)}>Cancel</Button>
+            <Button
+              textColor="#D97706"
+              onPress={() => {
+                void confirmDrawWinner();
+              }}
+            >
+              Get a Winner
+            </Button>
+          </Dialog.Actions>
+        </Dialog>
+      </Portal>
     </View>
   );
 }

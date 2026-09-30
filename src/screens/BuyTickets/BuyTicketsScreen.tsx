@@ -10,6 +10,7 @@ import {
   Modal,
   TouchableOpacity,
   FlatList,
+  Keyboard,
 } from 'react-native';
 import {
   Text,
@@ -31,10 +32,13 @@ import { RootStackParamList } from '../../types';
 import { ticketApi } from '../../services/api/raffleApi';
 import { stripeApi } from '../../services/api/stripeApi';
 import { computeChargeBreakdown, formatChargeCents } from '../../utils/paymentFees';
-import { getPublicIp } from '../../utils';
+import { getPublicIp, getTicketReferenceId, getOrgLogoUrl } from '../../utils';
 import { useAuthStore } from '../../store/authStore';
 import { blockWorkerFromForeignRaffle } from '../../utils/workerAccess';
 import TicketTierSelector from '../../components/TicketTierSelector';
+import CustomTicketAmountField, {
+  parseCustomTicketAmount,
+} from '../../components/CustomTicketAmountField';
 import PaymentChargeSummary from '../../components/PaymentChargeSummary';
 
 type NavigationProp = NativeStackNavigationProp<RootStackParamList>;
@@ -87,10 +91,18 @@ function BuyTicketsContent() {
 
   const [selectedPrice, setSelectedPrice] = useState<number | null>(null);
   const [selectedQuantity, setSelectedQuantity] = useState<number>(0);
+  const [customAmountText, setCustomAmountText] = useState('');
+  const [customAmountError, setCustomAmountError] = useState('');
+  const [customAmountActive, setCustomAmountActive] = useState(false);
+  const [customAmountBlurToken, setCustomAmountBlurToken] = useState(0);
   const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [donateExtra, setDonateExtra] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [error, setError] = useState('');
+
+  const isCustomAmountSelected =
+    customAmountActive ||
+    (!!customAmountText && !customAmountError && selectedPrice != null);
 
   const nameInputRef = useRef<RNTextInput>(null);
   const scrollViewRef = useRef<ScrollView>(null);
@@ -129,9 +141,13 @@ function BuyTicketsContent() {
           reset(JSON.parse(savedForm));
         }
         if (savedTicket) {
-          const { price, quantity } = JSON.parse(savedTicket);
+          const { price, quantity, custom } = JSON.parse(savedTicket);
           setSelectedPrice(price);
           setSelectedQuantity(quantity);
+          if (custom && price != null) {
+            setCustomAmountText(String(price));
+            setCustomAmountError('');
+          }
         }
       } catch {}
     })();
@@ -144,14 +160,58 @@ function BuyTicketsContent() {
     return () => subscription.unsubscribe();
   }, [watch]);
 
-  const handleTierSelect = (price: number, quantity: number) => {
-    setSelectedPrice(price);
-    setSelectedQuantity(quantity);
-    SecureStore.setItemAsync(TICKET_STORAGE_KEY, JSON.stringify({ price, quantity })).catch(() => {});
+  const persistTicketSelection = (
+    price: number,
+    quantity: number,
+    custom: boolean,
+  ) => {
+    SecureStore.setItemAsync(
+      TICKET_STORAGE_KEY,
+      JSON.stringify({ price, quantity, custom }),
+    ).catch(() => {});
+  };
+
+  const focusBuyerForm = () => {
     setTimeout(() => {
       nameInputRef.current?.focus();
       scrollViewRef.current?.scrollTo({ y: nameFieldY.current, animated: true });
     }, 50);
+  };
+
+  const handleTierSelect = (price: number, quantity: number) => {
+    Keyboard.dismiss();
+    setCustomAmountText('');
+    setCustomAmountError('');
+    setCustomAmountActive(false);
+    setCustomAmountBlurToken((n) => n + 1);
+    setSelectedPrice(price);
+    setSelectedQuantity(quantity);
+    persistTicketSelection(price, quantity, false);
+    focusBuyerForm();
+  };
+
+  const beginCustomAmount = () => {
+    setCustomAmountActive(true);
+    setSelectedPrice(null);
+    setSelectedQuantity(0);
+    setCustomAmountError('');
+  };
+
+  const handleCustomAmountChange = (raw: string) => {
+    const parsed = parseCustomTicketAmount(raw);
+    setCustomAmountText(parsed.cleaned);
+    setCustomAmountError(parsed.error);
+    setCustomAmountActive(true);
+
+    if (parsed.dollars == null || parsed.quantity == null) {
+      setSelectedPrice(null);
+      setSelectedQuantity(0);
+      return;
+    }
+
+    setSelectedPrice(parsed.dollars);
+    setSelectedQuantity(parsed.quantity);
+    persistTicketSelection(parsed.dollars, parsed.quantity, true);
   };
 
   const onSubmit = async (formData: BuyTicketFormData) => {
@@ -179,7 +239,11 @@ function BuyTicketsContent() {
 
       const fullAddress = `${formData.address}, ${formData.city}, ${formData.state} ${formData.zipCode}`;
 
-      // 1. Create ticket record (unpaid)
+      // 1. Create ticket record (unpaid) — prefer donationForm.id (source of truth)
+      const ticketRaffleId = donationForm?.id || raffleId;
+      if (!ticketRaffleId) {
+        throw new Error('Missing raffle id on Buy Tickets screen.');
+      }
       const ticket = await ticketApi.createTicket({
         email: formData.email,
         name: formData.name,
@@ -187,7 +251,7 @@ function BuyTicketsContent() {
         address: fullAddress,
         amount: selectedPrice,
         quantity: selectedQuantity,
-        raffleId,
+        raffleId: ticketRaffleId,
         ip,
         isFree: false,
         paid: false,
@@ -230,14 +294,17 @@ function BuyTicketsContent() {
         throw new Error(presentError.message);
       }
 
-      // 5. Payment successful - confirm on backend
-      await stripeApi.confirmPaymentSuccess(ticket.id);
+      // 5. Payment successful - confirm on backend (persist PI like Tap to Pay)
+      await stripeApi.confirmPaymentSuccess(ticket.id, paymentData.id);
 
       // 6. Send confirmation email (fire-and-forget, don't block navigation)
       stripeApi.sendPurchaseEmail({
         email: formData.email,
         quantity: selectedQuantity,
-        ticketNumber: ticket.id,
+        ticketNumber: getTicketReferenceId(ticket.id),
+        raffleId,
+        ticketId: ticket.id,
+        organizationLogoUrl: getOrgLogoUrl(donationForm.backgroundImage),
       }).catch((err) => console.warn('Confirmation email failed:', err.message));
 
       // Clear saved form data after successful checkout
@@ -284,8 +351,19 @@ function BuyTicketsContent() {
 
         {/* Ticket Tiers */}
         <TicketTierSelector
-          selectedPrice={selectedPrice}
+          selectedPrice={isCustomAmountSelected ? null : selectedPrice}
           onSelect={handleTierSelect}
+        />
+
+        <CustomTicketAmountField
+          value={customAmountText}
+          error={customAmountError}
+          selected={isCustomAmountSelected}
+          previewPrice={isCustomAmountSelected ? selectedPrice : null}
+          previewQuantity={isCustomAmountSelected ? selectedQuantity : null}
+          onChangeText={handleCustomAmountChange}
+          onFocus={beginCustomAmount}
+          blurToken={customAmountBlurToken}
         />
 
         {selectedPrice ? (

@@ -2,7 +2,7 @@ import React from 'react';
 import { View, StyleSheet, TouchableOpacity } from 'react-native';
 import { Text } from 'react-native-paper';
 import { TICKET_TIERS, COLORS } from '../constants';
-import { formatCurrency } from '../utils';
+import { formatCurrency, formatNumber } from '../utils';
 
 interface TicketTierSelectorProps {
   selectedPrice: number | null;
@@ -25,7 +25,7 @@ export default function TicketTierSelector({ selectedPrice, onSelect }: TicketTi
               activeOpacity={0.7}
             >
               <Text style={styles.quantityText}>
-                Ticket(s): {tier.quantity}
+                Ticket(s): {formatNumber(tier.quantity)}
               </Text>
               <View style={styles.divider} />
               <Text style={styles.priceText}>

@@ -114,12 +114,12 @@ export default function DownloadTicketsCsvButton({
   if (variant === 'icon') {
     return (
       <IconButton
-        icon={isDownloading ? 'loading' : 'download'}
+        icon={isDownloading ? 'loading' : 'download-outline'}
         iconColor={COLORS.primary}
         size={20}
         onPress={() => void handleDownload()}
         disabled={isDownloading}
-        style={styles.iconAction}
+        style={styles.actionBtn}
         accessibilityLabel="Download tickets CSV"
       />
     );
@@ -142,7 +142,7 @@ export default function DownloadTicketsCsvButton({
 }
 
 const styles = StyleSheet.create({
-  iconAction: {
+  actionBtn: {
     margin: 0,
   },
   button: {

@@ -1,5 +1,9 @@
 // @ts-nocheck — Runs in Supabase's Deno runtime, not in the React Native bundle.
+//
+// Creates a PaymentIntent on the connected raffle/org Stripe account for the
+// mobile Payment Sheet (same direct-charge model as terminal-payment-intent).
 
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { computeChargeBreakdown } from "../_shared/paymentFees.ts";
 
 const corsHeaders = {
@@ -47,6 +51,13 @@ Deno.serve(async (req: Request) => {
   }
 
   try {
+    if (!Deno.env.get("STRIPE_KEY")?.trim()) {
+      return jsonResponse(
+        { error: "STRIPE_KEY is not configured on the create-payment-intent function" },
+        500,
+      );
+    }
+
     const { amount, quantity, email, ticketId, raffleAccount, isApplicationAmount } =
       await req.json();
 
@@ -57,7 +68,11 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const baseAmountCents = Math.round(amount * 100);
+    const baseAmountCents = Math.round(Number(amount) * 100);
+    if (!Number.isFinite(baseAmountCents) || baseAmountCents < 50) {
+      return jsonResponse({ error: "Invalid ticket amount" }, 400);
+    }
+
     const breakdown = computeChargeBreakdown(baseAmountCents, {
       includePlatformFee: !!isApplicationAmount,
       channel: "online",
@@ -66,14 +81,17 @@ Deno.serve(async (req: Request) => {
     const params: Record<string, string> = {
       amount: String(breakdown.totalCents),
       currency: "usd",
-      "payment_method_types[]": "card",
+      "automatic_payment_methods[enabled]": "true",
       "metadata[ticketId]": ticketId,
       "metadata[quantity]": String(quantity ?? 1),
-      "metadata[email]": email ?? "",
       "metadata[baseAmountCents]": String(breakdown.baseAmountCents),
       "metadata[processingFeeCents]": String(breakdown.processingFeeCents),
       "metadata[platformFeeCents]": String(breakdown.platformFeeCents),
     };
+
+    if (email) {
+      params.receipt_email = email;
+    }
 
     if (breakdown.platformFeeCents > 0) {
       params.application_fee_amount = String(breakdown.platformFeeCents);
@@ -85,9 +103,34 @@ Deno.serve(async (req: Request) => {
       raffleAccount,
     );
 
+    if (!paymentIntent?.client_secret) {
+      throw new Error("PaymentIntent created but client_secret is missing");
+    }
+
+    const stripeSession = {
+      paymentIntentId: paymentIntent.id,
+      id: paymentIntent.id,
+      status: paymentIntent.status,
+    };
+
+    const supabaseAdmin = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    );
+    const { error: ticketError } = await supabaseAdmin
+      .from("ticket")
+      .update({ stripeSession })
+      .eq("id", ticketId);
+    if (ticketError) {
+      throw new Error(
+        ticketError.message || "Failed to save stripeSession on ticket",
+      );
+    }
+
     return jsonResponse({
       clientSecret: paymentIntent.client_secret,
       id: paymentIntent.id,
+      stripeSession,
       chargeBreakdown: breakdown,
     });
   } catch (err: unknown) {

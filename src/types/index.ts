@@ -13,6 +13,8 @@ export interface Organization {
   approved_by?: string | null;
   terminated_at?: string | null;
   terminated_by?: string | null;
+  stripe_account_id?: string | null;
+  stripe_account_json?: { id?: string } | null;
   created_at: string;
   updated_at: string;
 }
@@ -73,6 +75,14 @@ export interface DonationForm {
   organization_id: string | null;
   organization_name?: string | null;
   organization_approval_status?: OrgApprovalStatus | null;
+  /** When true, buyers must match raffleLocation to purchase. */
+  locationCheckEnabled?: boolean | null;
+  /** When true, the 10% platform fee checkbox defaults to checked at checkout. */
+  autoCheckDonation?: boolean | null;
+  presented_by_name?: string | null;
+  presented_by_image?: string | null;
+  mobile_title?: string | null;
+  custom_domain?: string | null;
   secure_link?: SecureLink | null;
   _count?: {
     tickets: number;
@@ -149,6 +159,11 @@ export interface UpdateFormPayload {
   draw_date?: string | null;
   min_ticket_price?: number | null;
   raffleLocation?: string | null;
+  locationCheckEnabled?: boolean | null;
+  autoCheckDonation?: boolean | null;
+  presented_by_name?: string | null;
+  presented_by_image?: string | null;
+  mobile_title?: string | null;
   stripeAccount?: any;
 }
 
@@ -176,23 +191,20 @@ export interface TerminalPaymentResult {
 
 // Navigation types
 export type RootStackParamList = {
-  MainTabs: undefined;
+  AdminLogin: undefined;
+  AdminSignup: undefined;
+  AdminTabs: undefined;
+  WorkerTabs: undefined;
   Raffle: { id: string };
   BuyTickets: { raffleId: string; donationForm: DonationForm };
   PaymentSuccess: { ticketId: string; quantity: number };
   FreeTicket: { raffleId: string };
-  Contact: undefined;
   Rules: { id: string };
   PrivacyPolicy: undefined;
   GeoRestricted: undefined;
-  // Admin
-  AdminLogin: undefined;
-  AdminSignup: undefined;
-  AdminDashboard: undefined;
+  // Admin stack (above tabs)
   EditRaffle: { id?: string; organizationId?: string | null };
   PreviewRaffle: { id: string };
-  AdminTickets: undefined;
-  AdminWinners: undefined;
   InPersonPayment: { id: string };
   AdminTapToPay: {
     startSetup?: boolean;
@@ -210,14 +222,16 @@ export type RootStackParamList = {
     raffleTitle?: string | null;
     organizationName?: string | null;
   };
-  ManageOrganizations: undefined;
-  WorkerDashboard: undefined;
-  WorkerTickets: undefined;
 };
 
-export type MainTabParamList = {
-  Home: undefined;
-  About: undefined;
-  Contact: undefined;
-  AdminLogin: undefined;
+export type AdminTabParamList = {
+  AdminDashboard: undefined;
+  ManageOrganizations: undefined;
+  AdminTickets: undefined;
+  AdminSettings: undefined;
+};
+
+export type WorkerTabParamList = {
+  WorkerDashboard: undefined;
+  WorkerTickets: undefined;
 };

@@ -37,12 +37,11 @@ import * as Clipboard from 'expo-clipboard';
 type ManageWorkersRouteProp = RouteProp<RootStackParamList, 'ManageWorkers'>;
 
 const DURATION_OPTIONS = [
-  { label: '4 hours', value: 4 },
-  { label: '8 hours', value: 8 },
-  { label: '12 hours', value: 12 },
-  { label: '24 hours', value: 24 },
-  { label: '48 hours', value: 48 },
-  { label: '72 hours', value: 72 },
+  { label: '1 day', value: 24 },
+  { label: '3 days', value: 72 },
+  { label: '7 days', value: 168 },
+  { label: '1 month', value: 720 }, // ponytail: 30×24h calendar month; switch to date math if needed
+  { label: '6 months', value: 4320 }, // ponytail: 180×24h; switch to date math if needed
 ];
 
 export default function ManageWorkersScreen() {
@@ -63,6 +62,7 @@ export default function ManageWorkersScreen() {
     isLoading: storeLoading,
     error: storeError,
     fetchWorkers,
+    prependWorker,
     removeWorker,
     clearError,
   } = useWorkerStore();
@@ -70,7 +70,7 @@ export default function ManageWorkersScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  const [durationHours, setDurationHours] = useState(8);
+  const [durationHours, setDurationHours] = useState(24);
   const [menuVisible, setMenuVisible] = useState(false);
   const [isCreating, setIsCreating] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -102,14 +102,21 @@ export default function ManageWorkersScreen() {
     useCallback(() => {
       clearError();
       void loadRaffleContext();
-      fetchWorkers(raffleId);
+      void fetchWorkers(raffleId).catch(() => {
+        // storeError is set inside fetchWorkers
+      });
     }, [raffleId, loadRaffleContext, fetchWorkers, clearError]),
   );
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await Promise.all([loadRaffleContext(), fetchWorkers(raffleId)]);
-    setRefreshing(false);
+    try {
+      await Promise.all([loadRaffleContext(), fetchWorkers(raffleId)]);
+    } catch {
+      // storeError is set inside fetchWorkers
+    } finally {
+      setRefreshing(false);
+    }
   };
 
   const togglePasswordVisibility = (workerId: string) => {
@@ -168,17 +175,32 @@ export default function ManageWorkersScreen() {
 
     setIsCreating(true);
     try {
-      await createWorker(
+      const created = await createWorker(
         email.trim(),
         password,
         raffleId,
         effectiveOrganizationId,
         durationHours,
       );
-      await fetchWorkers(raffleId);
+      if (created?.id) {
+        prependWorker({
+          ...created,
+          // Ensure password shows in list even if edge function omits it
+          login_password: created.login_password ?? password,
+          email: created.email || email.trim().toLowerCase(),
+        });
+      }
+      try {
+        await fetchWorkers(raffleId);
+      } catch (listErr: any) {
+        // Worker may already be in the list from prependWorker
+        if (!created?.id) {
+          setFormError(listErr.message || 'Worker created but failed to refresh list');
+        }
+      }
       setEmail('');
       setPassword('');
-      setDurationHours(8);
+      setDurationHours(24);
       Alert.alert('Success', 'Worker account created successfully');
     } catch (err: any) {
       setFormError(err.message || 'Failed to create worker');

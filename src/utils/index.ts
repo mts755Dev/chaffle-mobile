@@ -1,6 +1,7 @@
 import dayjs from 'dayjs';
 import customParseFormat from 'dayjs/plugin/customParseFormat';
 import { STORAGE_BUCKET, SUPABASE_URL } from '../constants';
+import { parseRaffleDrawDate } from '../lib/raffleDates';
 
 dayjs.extend(customParseFormat);
 
@@ -15,7 +16,7 @@ const DRAW_DATE_FORMATS = [
 
 /**
  * Parse raffle draw dates reliably.
- * Bare YYYY-MM-DD is preferred (web date input); falls back to common US formats / ISO.
+ * Datetimes without a timezone are Eastern wall clock (same as the website).
  */
 export function parseAppDate(
   value: string | Date | null | undefined,
@@ -35,6 +36,17 @@ export function parseAppDate(
   if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
     const d = dayjs(raw, 'YYYY-MM-DD', true);
     return d.isValid() ? d : null;
+  }
+
+  // Eastern wall-clock datetime — mirrors web parseRaffleDrawDate
+  // (do NOT parse as device-local; that marks future EST draws as expired).
+  if (
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(raw) &&
+    !/[zZ]|[+-]\d{2}:\d{2}$/.test(raw)
+  ) {
+    const eastern = parseRaffleDrawDate(raw);
+    if (Number.isNaN(eastern.getTime())) return null;
+    return dayjs(eastern);
   }
 
   for (const fmt of DRAW_DATE_FORMATS) {
@@ -60,6 +72,11 @@ export function formatCurrency(amount: number): string {
     minimumFractionDigits: 0,
     maximumFractionDigits: 0,
   }).format(amount);
+}
+
+/** Thousands separators for plain counts (e.g. 22000 → "22,000"). */
+export function formatNumber(value: number): string {
+  return new Intl.NumberFormat('en-US').format(value);
 }
 
 /**
@@ -143,11 +160,27 @@ export function resolveImageUrl(url: string | null | undefined): string | undefi
   }
 
   let path = url.startsWith('/') ? url.slice(1) : url;
-  // Web loader serves as /object/public/<bucket>/<src>
-  if (!path.startsWith('public/') && !path.startsWith(`${STORAGE_BUCKET}/`)) {
-    // Legacy relative paths without bucket — treat as object key under public bucket.
-  }
+  // Encode each segment so email clients can load logos with spaces (mirrors web getOrgLogoUrl).
+  path = path
+    .split('/')
+    .map((segment) => {
+      if (!segment) return segment;
+      try {
+        return encodeURIComponent(decodeURIComponent(segment));
+      } catch {
+        return encodeURIComponent(segment);
+      }
+    })
+    .join('/');
+
   return `${base}/storage/v1/object/public/${STORAGE_BUCKET}/${path}`;
+}
+
+/** Org logo for purchase emails — same source as website (raffle backgroundImage). */
+export function getOrgLogoUrl(
+  backgroundImage: string | null | undefined,
+): string | null {
+  return resolveImageUrl(backgroundImage) ?? null;
 }
 
 /**

@@ -182,7 +182,7 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({ organization: data });
     }
 
-    if (action === "terminate") {
+    if (action === "terminate" || action === "delete") {
       const organizationId = String(body?.organizationId || "");
       if (!organizationId) {
         return jsonResponse({ error: "Missing organizationId" }, 400);
@@ -202,33 +202,67 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ error: "Organization is already terminated" }, 400);
       }
 
-      if (org.approval_status !== "approved") {
+      // Hard-delete allowed for approved + rejected (not pending — use reject first)
+      if (
+        org.approval_status !== "approved" &&
+        org.approval_status !== "rejected"
+      ) {
         return jsonResponse(
-          { error: "Only approved organizations can be terminated" },
+          {
+            error:
+              "Only approved or rejected organizations can be deleted. Reject pending orgs first if needed.",
+          },
           400,
         );
       }
 
       const { data: workers, error: workersError } = await adminClient
         .from("worker")
-        .select("id, user_id")
+        .select("id, user_id, raffle_id")
         .eq("organization_id", organizationId);
 
       if (workersError) {
         return jsonResponse({ error: workersError.message }, 500);
       }
 
-      for (const worker of workers ?? []) {
-        if (worker.user_id) {
-          const { error: deleteAuthError } = await adminClient.auth.admin.deleteUser(
-            worker.user_id,
+      const { data: orgRaffles, error: rafflesError } = await adminClient
+        .from("donation_form")
+        .select("id")
+        .eq("organization_id", organizationId);
+
+      if (rafflesError) {
+        return jsonResponse({ error: rafflesError.message }, 500);
+      }
+
+      const raffleIds = (orgRaffles ?? []).map((r: { id: string }) => r.id);
+
+      // Also catch workers tied to org raffles but missing organization_id
+      let raffleWorkers: { id: string; user_id: string | null }[] = [];
+      if (raffleIds.length > 0) {
+        const { data: byRaffle, error: byRaffleError } = await adminClient
+          .from("worker")
+          .select("id, user_id")
+          .in("raffle_id", raffleIds);
+        if (byRaffleError) {
+          return jsonResponse({ error: byRaffleError.message }, 500);
+        }
+        raffleWorkers = byRaffle ?? [];
+      }
+
+      const authUserIds = new Set<string>();
+      for (const worker of [...(workers ?? []), ...raffleWorkers]) {
+        if (worker.user_id) authUserIds.add(worker.user_id);
+      }
+
+      for (const userId of authUserIds) {
+        const { error: deleteAuthError } = await adminClient.auth.admin.deleteUser(
+          userId,
+        );
+        if (deleteAuthError) {
+          return jsonResponse(
+            { error: deleteAuthError.message || "Failed to delete worker login" },
+            400,
           );
-          if (deleteAuthError) {
-            return jsonResponse(
-              { error: deleteAuthError.message || "Failed to delete worker login" },
-              400,
-            );
-          }
         }
       }
 
@@ -241,13 +275,14 @@ Deno.serve(async (req: Request) => {
         return jsonResponse({ error: deleteWorkersError.message }, 500);
       }
 
-      const { data: orgRaffles, error: rafflesError } = await adminClient
-        .from("donation_form")
-        .select("id")
-        .eq("organization_id", organizationId);
-
-      if (rafflesError) {
-        return jsonResponse({ error: rafflesError.message }, 500);
+      if (raffleIds.length > 0) {
+        const { error: deleteRaffleWorkersError } = await adminClient
+          .from("worker")
+          .delete()
+          .in("raffle_id", raffleIds);
+        if (deleteRaffleWorkersError) {
+          return jsonResponse({ error: deleteRaffleWorkersError.message }, 500);
+        }
       }
 
       let deletedRaffles = 0;
@@ -297,7 +332,7 @@ Deno.serve(async (req: Request) => {
       return jsonResponse({
         success: true,
         deletedRaffles,
-        deletedWorkers: (workers ?? []).length,
+        deletedWorkers: authUserIds.size,
       });
     }
 

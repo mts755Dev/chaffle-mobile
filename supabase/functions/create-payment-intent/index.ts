@@ -5,6 +5,10 @@
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
 import { computeChargeBreakdown } from "../_shared/paymentFees.ts";
+import {
+  assertValidTicketPricing,
+  isValidPaidTicketPricing,
+} from "../_shared/ticketPricing.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -68,9 +72,60 @@ Deno.serve(async (req: Request) => {
       );
     }
 
-    const baseAmountCents = Math.round(Number(amount) * 100);
+    const amountNum = Number(amount);
+    const quantityNum = Number(quantity ?? 1);
+    try {
+      assertValidTicketPricing({ amount: amountNum, quantity: quantityNum });
+    } catch (e) {
+      return jsonResponse(
+        { error: e instanceof Error ? e.message : "Invalid ticket pricing" },
+        400,
+      );
+    }
+
+    const baseAmountCents = Math.round(amountNum * 100);
     if (!Number.isFinite(baseAmountCents) || baseAmountCents < 50) {
       return jsonResponse({ error: "Invalid ticket amount" }, 400);
+    }
+
+    const supabaseAdmin = createClient(
+      Deno.env.get("SUPABASE_URL")!,
+      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
+    );
+
+    const { data: ticket, error: loadError } = await supabaseAdmin
+      .from("ticket")
+      .select("id, amount, quantity, paid, isFree")
+      .eq("id", ticketId)
+      .maybeSingle();
+
+    if (loadError) {
+      return jsonResponse({ error: loadError.message }, 500);
+    }
+    if (!ticket) {
+      return jsonResponse({ error: "Ticket not found" }, 404);
+    }
+    if (ticket.paid) {
+      return jsonResponse({ error: "Ticket is already paid" }, 400);
+    }
+    if (ticket.isFree) {
+      return jsonResponse({ error: "Free tickets do not require payment" }, 400);
+    }
+
+    const ticketAmount = Number(ticket.amount);
+    const ticketQty = Number(ticket.quantity);
+    if (
+      ticketAmount !== amountNum ||
+      ticketQty !== quantityNum ||
+      !isValidPaidTicketPricing(ticketAmount, ticketQty)
+    ) {
+      return jsonResponse(
+        {
+          error:
+            "Ticket amount/quantity mismatch or invalid pricing — payment refused",
+        },
+        400,
+      );
     }
 
     const breakdown = computeChargeBreakdown(baseAmountCents, {
@@ -83,7 +138,7 @@ Deno.serve(async (req: Request) => {
       currency: "usd",
       "automatic_payment_methods[enabled]": "true",
       "metadata[ticketId]": ticketId,
-      "metadata[quantity]": String(quantity ?? 1),
+      "metadata[quantity]": String(ticketQty),
       "metadata[baseAmountCents]": String(breakdown.baseAmountCents),
       "metadata[processingFeeCents]": String(breakdown.processingFeeCents),
       "metadata[platformFeeCents]": String(breakdown.platformFeeCents),
@@ -113,10 +168,6 @@ Deno.serve(async (req: Request) => {
       status: paymentIntent.status,
     };
 
-    const supabaseAdmin = createClient(
-      Deno.env.get("SUPABASE_URL")!,
-      Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!,
-    );
     const { error: ticketError } = await supabaseAdmin
       .from("ticket")
       .update({ stripeSession })

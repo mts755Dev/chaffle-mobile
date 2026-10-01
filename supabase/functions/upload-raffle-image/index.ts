@@ -4,7 +4,8 @@
 // (same layout as the Next.js uploadRaffleImage server action).
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
-import { isOrgAdmin, isSuperAdmin } from "../_shared/drawAuth.ts";
+import { isSuperAdmin } from "../_shared/drawAuth.ts";
+import { callerOwnsOrganization } from "../_shared/workerAccess.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -98,11 +99,12 @@ Deno.serve(async (req) => {
 
     const allowed =
       isSuperAdmin(user) ||
-      (isOrgAdmin(user) &&
-        raffle.organization_id &&
-        raffle.organization_id ===
-          ((user.user_metadata?.organization_id as string | undefined) ??
-            (user.app_metadata?.organization_id as string | undefined)));
+      (!!raffle.organization_id &&
+        (await callerOwnsOrganization(
+          adminClient,
+          raffle.organization_id,
+          user.id,
+        )));
 
     if (!allowed) {
       return jsonResponse({ error: "Not authorized to upload for this raffle" }, 403);

@@ -11,6 +11,7 @@ import {
   ContactFormData,
   OrgApprovalStatus,
 } from '../../types';
+import { assertValidTicketPricing } from '../../utils/ticketPricing';
 
 /**
  * Raffle / Donation Form APIs — PostgREST via authenticated Supabase client.
@@ -451,11 +452,13 @@ export const ticketApi = {
       throw new Error('Missing or invalid raffle id — cannot create ticket.');
     }
 
-    const amount = Math.round(Number(payload.amount));
-    const quantity = Math.round(Number(payload.quantity));
+    const isFree = !!payload.isFree;
+    const amount = isFree ? 0 : Math.round(Number(payload.amount));
+    const quantity = isFree ? 1 : Math.round(Number(payload.quantity));
     if (!Number.isFinite(amount) || amount < 0 || !Number.isFinite(quantity) || quantity < 1) {
       throw new Error('Invalid ticket amount or quantity.');
     }
+    assertValidTicketPricing({ amount, quantity, isFree });
 
     const { data: isOpen, error: openErr } = await supabasePublic.rpc(
       'raffle_is_open_for_purchase',
@@ -490,7 +493,7 @@ export const ticketApi = {
       quantity,
       donation_formId: raffleId,
       ip: payload.ip || '0.0.0.0',
-      isFree: !!payload.isFree,
+      isFree,
       paid: false,
       isWinner: false,
     };

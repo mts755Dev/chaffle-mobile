@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Deploy security-sensitive edge functions after 016/017 + drawAuth hardening.
+# Deploy security-sensitive edge functions after 016/017/024 + drawAuth / pricing hardening.
 # Run from repo that owns the linked Supabase project (usually chaffle-mobile).
 set -euo pipefail
 
@@ -14,6 +14,8 @@ FUNCTIONS=(
   delete-worker
   manage-custom-domain
   upload-raffle-image
+  create-payment-intent
+  create-checkout-ticket
 )
 
 echo "Deploying mobile edge functions from $ROOT ..."
@@ -34,4 +36,12 @@ if [[ -d "$WEB_ROOT/supabase/functions" ]]; then
   done
 fi
 
-echo "Done. Apply SQL 016 → 017 → 018 (verify) in Supabase SQL Editor if not already applied."
+echo ""
+echo "Done. Apply SQL migrations in Supabase SQL Editor if not already applied:"
+echo "  016 → 017 → 018 (verify) → … → 024_lock_org_worker_claims.sql"
+echo ""
+echo "Smoke checks after 024 + edge redeploy:"
+echo "  1) Sign in as a normal user, auth.updateUser({ data: { role: 'org_admin', organization_id: '<victim>' } })"
+echo "     → admin UI empty / no Stripe / no raffle mutate for victim org"
+echo "  2) Checkout or create-payment-intent with amount=1, quantity=10000 → rejected"
+echo "  3) Valid preset e.g. amount=5, quantity=1 → accepted"

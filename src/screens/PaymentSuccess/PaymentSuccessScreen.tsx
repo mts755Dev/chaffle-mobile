@@ -34,34 +34,36 @@ export default function PaymentSuccessScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.iconContainer}>
-        <Icon source="check-circle" size={80} color={COLORS.success} />
+        <Icon source="check-circle" size={56} color={COLORS.success} />
       </View>
 
-      <Text style={styles.title}>Thank You for Purchasing</Text>
-      <Text style={styles.subtitle}>Your payment was successful</Text>
+      <Text style={styles.title}>Thank You for Your Purchase!</Text>
+      <Text style={styles.subtitle}>
+        Your payment was successful and your tickets have been entered into the
+        raffle.
+      </Text>
 
       <View style={styles.card}>
-        <Text style={styles.cardTitle}>Ticket Confirmation</Text>
-
-        <View style={styles.referenceBlock}>
-          <Text style={styles.referenceLabel}>Ticket ID Reference #</Text>
-          <Text style={styles.referenceValue} selectable>
-            {referenceId}
-          </Text>
-        </View>
-
-        <View style={styles.row}>
-          <Text style={styles.label}>Quantity</Text>
-          <Text style={styles.value}>
+        <Text style={styles.referenceLabel}>Your Ticket ID:</Text>
+        <Text style={styles.referenceValue} selectable>
+          #{referenceId}
+        </Text>
+        {quantity != null && (
+          <Text style={styles.quantityHint}>
             {quantity} {quantity === 1 ? 'ticket' : 'tickets'}
           </Text>
-        </View>
+        )}
       </View>
 
       <Text style={styles.note}>
-        Save this Ticket ID Reference # — it identifies your entry. A confirmation
-        email has also been sent. Winners will be announced via email and social
-        media. Good luck!
+        You will also receive a confirmation email with your ticket information
+        shortly. If you don't see it, check your spam/junk folder.
+      </Text>
+
+      <Text style={styles.note}>
+        Feel free to screenshot or write down this Ticket ID. You may use it to
+        check if you have won once the winning number is posted on the raffle
+        page.
       </Text>
 
       <Button
@@ -86,46 +88,35 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   iconContainer: {
-    marginBottom: 16,
+    marginBottom: 12,
   },
   title: {
-    fontSize: 26,
+    fontSize: 24,
     fontWeight: 'bold',
     color: COLORS.foreground,
     textAlign: 'center',
   },
   subtitle: {
-    fontSize: 16,
-    color: COLORS.success,
-    marginTop: 4,
-    marginBottom: 24,
+    fontSize: 15,
+    color: COLORS.textSecondary,
+    marginTop: 8,
+    marginBottom: 20,
+    textAlign: 'center',
+    lineHeight: 22,
+    paddingHorizontal: 8,
   },
   card: {
-    backgroundColor: COLORS.surface,
+    backgroundColor: COLORS.surfaceMuted,
     borderRadius: 12,
     padding: 20,
     width: '100%',
-    elevation: 2,
-    marginBottom: 24,
-  },
-  cardTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: COLORS.foreground,
-    marginBottom: 16,
-  },
-  referenceBlock: {
-    alignItems: 'center',
-    paddingVertical: 16,
-    paddingHorizontal: 12,
-    marginBottom: 12,
-    borderRadius: 10,
-    backgroundColor: COLORS.surfaceMuted,
+    marginBottom: 20,
     borderWidth: 1,
     borderColor: COLORS.border,
+    alignItems: 'center',
   },
   referenceLabel: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '600',
     color: COLORS.textSecondary,
     marginBottom: 8,
@@ -136,33 +127,23 @@ const styles = StyleSheet.create({
     letterSpacing: 1,
     color: COLORS.primary,
   },
-  row: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: COLORS.border,
-  },
-  label: {
-    fontSize: 14,
+  quantityHint: {
+    marginTop: 8,
+    fontSize: 13,
     color: COLORS.textSecondary,
-  },
-  value: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: COLORS.foreground,
   },
   note: {
     fontSize: 13,
     color: COLORS.textSecondary,
     textAlign: 'center',
     lineHeight: 20,
-    marginBottom: 24,
+    marginBottom: 12,
   },
   button: {
     backgroundColor: COLORS.primary,
     borderRadius: 12,
     width: '100%',
+    marginTop: 12,
   },
   buttonContent: {
     paddingVertical: 8,

@@ -5,6 +5,7 @@
 // admin session cannot break INSERT via authenticated RLS.
 
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { assertValidTicketPricing } from "../_shared/ticketPricing.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -63,6 +64,22 @@ Deno.serve(async (req: Request) => {
       );
     }
 
+    try {
+      assertValidTicketPricing({
+        amount: isFree ? 0 : amount,
+        quantity: isFree ? 1 : quantity,
+        isFree,
+      });
+    } catch (e) {
+      return jsonResponse(
+        { error: e instanceof Error ? e.message : "Invalid ticket pricing" },
+        400,
+      );
+    }
+
+    const resolvedQuantity = isFree ? 1 : quantity;
+    const resolvedAmount = isFree ? 0 : amount;
+
     // Force service_role on every PostgREST call (never inherit caller JWT).
     const admin = createClient(supabaseUrl, serviceKey, {
       auth: { persistSession: false, autoRefreshToken: false },
@@ -98,8 +115,8 @@ Deno.serve(async (req: Request) => {
         buyerEmail: email,
         phone,
         address,
-        amount,
-        quantity,
+        amount: resolvedAmount,
+        quantity: resolvedQuantity,
         donation_formId: raffleId,
         ip,
         isFree,

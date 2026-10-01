@@ -465,6 +465,41 @@ export const useAuthStore = create<AuthState>((set, get) => ({
         return;
       }
 
+      // Forgeable metadata worker claim without a worker row → no worker privilege.
+      if (readMetadataRole(user) === 'worker') {
+        const { data: workerRow } = await supabase
+          .from('worker')
+          .select('id, raffle_id, expires_at')
+          .eq('user_id', user.id)
+          .limit(1)
+          .maybeSingle();
+        if (!workerRow?.raffle_id) {
+          await supabase.auth.signOut();
+          set({
+            error: 'Worker access is not assigned. Contact your organization admin.',
+            isLoading: false,
+          });
+          return;
+        }
+      }
+
+      // Forgeable org_admin without ownership and without recovery name → reject.
+      if (
+        readMetadataRole(user) === 'org_admin' &&
+        !deriveOrgId(user) &&
+        !user.user_metadata?.organization_name
+      ) {
+        const ownedIds = await fetchOwnedOrganizationIds(user.id);
+        if (ownedIds.length === 0) {
+          await supabase.auth.signOut();
+          set({
+            error: 'No organization linked to this account.',
+            isLoading: false,
+          });
+          return;
+        }
+      }
+
       if (
         readMetadataRole(user) === 'org_admin' &&
         !deriveOrgId(user)
